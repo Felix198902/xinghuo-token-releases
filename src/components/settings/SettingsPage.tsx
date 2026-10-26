@@ -46,17 +46,21 @@ import { ImportExportSection } from "@/components/settings/ImportExportSection";
 import { BackupListSection } from "@/components/settings/BackupListSection";
 import { WebdavSyncSection } from "@/components/settings/WebdavSyncSection";
 import { AboutSection } from "@/components/settings/AboutSection";
-import { ProxyTabContent } from "@/components/settings/ProxyTabContent";
 import { ConnectivityCheckConfigPanel } from "@/components/usage/ConnectivityCheckConfigPanel";
-import { UsageDashboard } from "@/components/usage/UsageDashboard";
 import { LogConfigPanel } from "@/components/settings/LogConfigPanel";
-import { AuthCenterPanel } from "@/components/settings/AuthCenterPanel";
 import { CodexAuthSettings } from "@/components/settings/CodexAuthSettings";
 import { useInstalledSkills } from "@/hooks/useSkills";
 import { useSettings } from "@/hooks/useSettings";
 import { useImportExport } from "@/hooks/useImportExport";
 import { useTranslation } from "react-i18next";
 import type { SettingsFormState } from "@/hooks/useSettings";
+
+// 星火客户端只连自家服务：本地代理 / 故障转移、第三方账号认证、代理用量统计都不开放。
+const SETTINGS_TABS = ["general", "advanced", "about"] as const;
+
+function visibleTab(tab: string): string {
+  return (SETTINGS_TABS as readonly string[]).includes(tab) ? tab : "general";
+}
 
 interface SettingsDialogProps {
   open: boolean;
@@ -113,7 +117,7 @@ export function SettingsPage({
 
   useEffect(() => {
     if (open) {
-      setActiveTab(defaultTab);
+      setActiveTab(visibleTab(defaultTab));
       resetStatus();
     }
   }, [open, resetStatus, defaultTab]);
@@ -224,18 +228,13 @@ export function SettingsPage({
           onValueChange={setActiveTab}
           className="flex flex-col h-full"
         >
-          <TabsList className="grid w-full grid-cols-6 mb-6 glass rounded-lg">
+          <TabsList className="grid w-full grid-cols-3 mb-6 glass rounded-lg">
             <TabsTrigger value="general">
               {t("settings.tabGeneral")}
-            </TabsTrigger>
-            <TabsTrigger value="proxy">{t("settings.tabProxy")}</TabsTrigger>
-            <TabsTrigger value="auth">
-              {t("settings.tabAuth", { defaultValue: "认证" })}
             </TabsTrigger>
             <TabsTrigger value="advanced">
               {t("settings.tabAdvanced")}
             </TabsTrigger>
-            <TabsTrigger value="usage">{t("usage.title")}</TabsTrigger>
             <TabsTrigger value="about">{t("common.about")}</TabsTrigger>
           </TabsList>
 
@@ -290,26 +289,6 @@ export function SettingsPage({
                     />
                   </motion.div>
                 ) : null}
-              </TabsContent>
-
-              <TabsContent value="proxy" className="space-y-6 mt-0 pb-4">
-                {settings ? (
-                  <ProxyTabContent
-                    settings={settings}
-                    onAutoSave={handleAutoSave}
-                  />
-                ) : null}
-              </TabsContent>
-
-              <TabsContent value="auth" className="space-y-6 mt-0 pb-4">
-                <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.3 }}
-                  className="space-y-6"
-                >
-                  <AuthCenterPanel />
-                </motion.div>
               </TabsContent>
 
               <TabsContent value="advanced" className="space-y-6 mt-0 pb-4">
@@ -508,21 +487,6 @@ export function SettingsPage({
 
               <TabsContent value="about" className="mt-0">
                 <AboutSection isPortable={isPortable} />
-              </TabsContent>
-
-              <TabsContent value="usage" className="mt-0">
-                <UsageDashboard
-                  refreshIntervalMs={settings?.usageDashboardRefreshIntervalMs}
-                  onRefreshIntervalChange={(usageDashboardRefreshIntervalMs) =>
-                    handleAutoSave({ usageDashboardRefreshIntervalMs })
-                  }
-                  sessionAutoSyncEnabled={
-                    settings?.sessionAutoSyncEnabled ?? true
-                  }
-                  onSessionAutoSyncEnabledChange={(sessionAutoSyncEnabled) =>
-                    handleAutoSave({ sessionAutoSyncEnabled })
-                  }
-                />
               </TabsContent>
             </div>
 

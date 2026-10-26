@@ -21,7 +21,6 @@ import { geminiProviderPresets } from "@/config/geminiProviderPresets";
 import { claudeDesktopProviderPresets } from "@/config/claudeDesktopProviderPresets";
 import { extractCodexBaseUrl } from "@/utils/providerConfigUtils";
 import { extractGrokBuildBaseUrl } from "@/utils/grokBuildConfig";
-import { GROKBUILD_OFFICIAL_PROVIDER_ID } from "@/utils/providerCapabilities";
 import type { OpenClawSuggestedDefaults } from "@/config/openclawProviderPresets";
 import type { UniversalProviderPreset } from "@/config/universalProviderPresets";
 import type { ManagedAuthProvider } from "@/lib/api";
@@ -34,8 +33,6 @@ interface AddProviderDialogProps {
     provider: Omit<Provider, "id"> & {
       providerKey?: string;
       suggestedDefaults?: OpenClawSuggestedDefaults;
-      ensureClaudeDesktopOfficialSeed?: boolean;
-      ensureGrokBuildOfficialSeed?: boolean;
     },
   ) => Promise<void> | void;
 }
@@ -47,15 +44,8 @@ export function AddProviderDialog({
   onSubmit,
 }: AddProviderDialogProps) {
   const { t } = useTranslation();
-  // OpenCode and OpenClaw don't support universal providers
-  const showUniversalTab =
-    appId !== "opencode" &&
-    appId !== "openclaw" &&
-    appId !== "hermes" &&
-    appId !== "pi" &&
-    appId !== "mcode" &&
-    appId !== "grokbuild" &&
-    appId !== "claude-desktop";
+  // 星火客户端不提供「统一供应商」：它的预设都是第三方站点，顾客只用自家服务
+  const showUniversalTab = false;
   const [activeTab, setActiveTab] = useState<"app-specific" | "universal">(
     "app-specific",
   );
@@ -164,8 +154,6 @@ export function AddProviderDialog({
       const providerData: Omit<Provider, "id"> & {
         providerKey?: string;
         suggestedDefaults?: OpenClawSuggestedDefaults;
-        ensureClaudeDesktopOfficialSeed?: boolean;
-        ensureGrokBuildOfficialSeed?: boolean;
       } = {
         name: values.name.trim(),
         notes: values.notes?.trim() || undefined,
@@ -176,22 +164,6 @@ export function AddProviderDialog({
         ...(values.presetCategory ? { category: values.presetCategory } : {}),
         ...(values.meta ? { meta: values.meta } : {}),
       };
-      if (appId === "claude-desktop" && values.presetId) {
-        const presetIndex = parseInt(
-          values.presetId.replace("claude-desktop-", ""),
-        );
-        const preset = claudeDesktopProviderPresets[presetIndex];
-        providerData.ensureClaudeDesktopOfficialSeed =
-          values.presetCategory === "official" &&
-          preset?.category === "official";
-      }
-
-      if (appId === "grokbuild" && values.presetId) {
-        providerData.ensureGrokBuildOfficialSeed =
-          values.presetCategory === "official" &&
-          values.presetId === GROKBUILD_OFFICIAL_PROVIDER_ID;
-      }
-
       // Apps whose native catalog has a stable provider key use it as the
       // managed provider identity.
       if (

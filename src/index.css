@@ -4,59 +4,49 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 240 10% 3.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 240 10% 3.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 240 10% 3.9%;
-
-    --primary: 210 100% 56%;
+    --background: 210 55% 97%;
+    --foreground: 218 43% 22%;
+    --card: 210 50% 99%;
+    --card-foreground: 218 43% 22%;
+    --popover: 210 50% 99%;
+    --popover-foreground: 218 43% 22%;
+    --primary: 215 54% 49%;
     --primary-foreground: 0 0% 100%;
-
-    --secondary: 240 4.8% 95.9%;
-    --secondary-foreground: 240 5.9% 10%;
-
-    --muted: 240 4.8% 95.9%;
-    --muted-foreground: 240 3.8% 46.1%;
-    --accent: 240 4.8% 95.9%;
-    --accent-foreground: 240 5.9% 10%;
-
-    --destructive: 0 84.2% 60.2%;
+    --secondary: 211 45% 91%;
+    --secondary-foreground: 218 43% 22%;
+    --muted: 211 40% 93%;
+    --muted-foreground: 216 20% 46%;
+    --accent: 211 50% 90%;
+    --accent-foreground: 218 43% 22%;
+    --destructive: 0 72% 48%;
     --destructive-foreground: 0 0% 98%;
-
-    --border: 240 5.9% 90%;
-    --input: 240 5.9% 90%;
-    --ring: 210 100% 56%;
+    --border: 212 30% 85%;
+    --input: 212 30% 82%;
+    --ring: 215 54% 49%;
 
     --radius: 0.5rem;
   }
 
   .dark {
-    --background: 240 5% 12%;
-    --foreground: 0 0% 98%;
-    --card: 240 5% 16%;
-    --card-foreground: 0 0% 98%;
-    --popover: 240 5% 16%;
-    --popover-foreground: 0 0% 98%;
-
-    --primary: 210 100% 54%;
-    --primary-foreground: 0 0% 100%;
-
-    --secondary: 240 5% 18%;
-    --secondary-foreground: 0 0% 98%;
-
-    --muted: 240 5% 18%;
-    --muted-foreground: 240 5% 64.9%;
-    --accent: 240 5% 18%;
-    --accent-foreground: 0 0% 98%;
-
-    --destructive: 0 62.8% 30.6%;
+    --background: 240 21% 12%;
+    --foreground: 226 64% 88%;
+    --card: 240 21% 15%;
+    --card-foreground: 226 64% 88%;
+    --popover: 240 21% 15%;
+    --popover-foreground: 226 64% 88%;
+    --primary: 267 84% 81%;
+    --primary-foreground: 240 21% 12%;
+    --secondary: 237 16% 23%;
+    --secondary-foreground: 226 64% 88%;
+    --muted: 237 16% 20%;
+    --muted-foreground: 228 24% 72%;
+    --accent: 237 16% 26%;
+    --accent-foreground: 226 64% 88%;
+    --destructive: 0 63% 47%;
     --destructive-foreground: 0 0% 98%;
-
-    --border: 240 5% 24%;
-    --input: 240 5% 24%;
-    --ring: 210 100% 54%;
+    --border: 237 16% 28%;
+    --input: 237 16% 32%;
+    --ring: 267 84% 81%;
   }
 }
 
@@ -143,6 +133,21 @@ body {
 
 html.dark {
   color-scheme: dark;
+}
+
+/* 新主题从点击位置展开，旧主题保持静止，避免默认交叉淡入。 */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+::view-transition-old(root) {
+  z-index: 1;
+}
+
+::view-transition-new(root) {
+  z-index: 2;
 }
 
 .status-heartbeat {
@@ -295,4 +300,19 @@ input[type="password"]::-ms-clear {
     min-width: 0;
     flex: 1 1 0%;
   }
+}
+
+/* 首页以低饱和主题光晕强调接入区。 */
+.activation-page {
+  background:
+    radial-gradient(
+      ellipse at 15% 0%,
+      hsl(var(--primary) / 0.1),
+      transparent 55%
+    ),
+    radial-gradient(
+      ellipse at 95% 70%,
+      hsl(var(--accent) / 0.65),
+      transparent 55%
+    );
 }

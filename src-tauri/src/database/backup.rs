@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use tempfile::{Builder, NamedTempFile};
 
-const CC_SWITCH_SQL_EXPORT_HEADER: &str = "-- CC Switch SQLite 导出";
+const SQL_EXPORT_HEADER: &str = "-- 星火无限token SQLite 导出";
 
 /// Bound combined INSERT batches while still amortizing statement parsing.
 /// A row larger than this cap is emitted alone because it cannot be split.
@@ -280,14 +280,22 @@ impl Database {
 
     fn validate_cc_switch_sql_export(sql: &str) -> Result<(), AppError> {
         let trimmed = sql.trim_start();
-        if trimmed.starts_with(CC_SWITCH_SQL_EXPORT_HEADER) {
+        // 保留旧版本备份头的识别，改名后仍能导入已有备份。
+        if [
+            SQL_EXPORT_HEADER,
+            "-- 星火 token 无限使用 SQLite 导出",
+            "-- CC Switch SQLite 导出",
+        ]
+        .iter()
+        .any(|header| trimmed.starts_with(header))
+        {
             return Ok(());
         }
 
         Err(AppError::localized(
             "backup.sql.invalid_format",
-            "仅支持导入由 CC Switch 导出的 SQL 备份文件。",
-            "Only SQL backups exported by CC Switch are supported.",
+            "仅支持导入由 星火无限token 导出的 SQL 备份文件。",
+            "Only SQL backups exported by 星火无限token are supported.",
         ))
     }
 
@@ -510,7 +518,7 @@ impl Database {
     where
         F: FnOnce(&Path, &Path) -> Result<(), AppError>,
     {
-        let db_path = get_app_config_dir().join("cc-switch.db");
+        let db_path = get_app_config_dir().join(crate::config::APP_DB_FILE_NAME);
         if !db_path.exists() {
             return Ok(None);
         }
@@ -531,7 +539,7 @@ impl Database {
         // discovery and retention only see the final path after the complete
         // SQLite image has been atomically published.
         let mut temp_path = Builder::new()
-            .prefix(".cc-switch-backup-")
+            .prefix(".xinghuo-token-backup-")
             .suffix(".tmp")
             .tempfile_in(&backup_dir)
             .map_err(|e| AppError::io(&backup_dir, e))?
@@ -669,7 +677,7 @@ impl Database {
         ))
     }
 
-    /// Validate that the external SQL created a recognizable CC Switch schema.
+    /// Validate that the external SQL created a recognizable app schema.
     ///
     /// These tables all existed in the oldest supported SQL-export schema
     /// (v3.8.x). Checking before migrations keeps header-only/truncated files
@@ -696,8 +704,8 @@ impl Database {
             let names = missing.join(", ");
             return Err(AppError::localized(
                 "backup.sql.invalid_schema",
-                format!("导入的 SQL 缺少 CC Switch 必需表：{names}"),
-                format!("The imported SQL is missing required CC Switch tables: {names}"),
+                format!("导入的 SQL 缺少 星火无限token 必需表：{names}"),
+                format!("The imported SQL is missing required 星火无限token tables: {names}"),
             ));
         }
         Ok(())
@@ -712,7 +720,7 @@ impl Database {
             .unwrap_or(0);
 
         output.push_str(&format!(
-            "-- CC Switch SQLite 导出\n-- 生成时间: {timestamp}\n-- user_version: {user_version}\n"
+            "{SQL_EXPORT_HEADER}\n-- 生成时间: {timestamp}\n-- user_version: {user_version}\n"
         ));
         output.push_str("PRAGMA foreign_keys=OFF;\n");
         output.push_str(&format!("PRAGMA user_version={user_version};\n"));
@@ -1186,6 +1194,18 @@ mod tests {
     use rusqlite::Connection;
     use serial_test::serial;
 
+    #[test]
+    fn sql_export_headers_accept_current_and_legacy_brands() {
+        for header in [
+            super::SQL_EXPORT_HEADER,
+            "-- 星火 token 无限使用 SQLite 导出",
+            "-- CC Switch SQLite 导出",
+        ] {
+            assert!(Database::validate_cc_switch_sql_export(header).is_ok());
+        }
+        assert!(Database::validate_cc_switch_sql_export("-- unrelated export").is_err());
+    }
+
     struct TestHomeGuard {
         previous_test_home: Option<std::ffi::OsString>,
         temp_dir: tempfile::TempDir,
@@ -1199,9 +1219,9 @@ mod tests {
             // Prevent the Windows legacy-HOME fallback without mutating HOME:
             // an existing default DB keeps get_app_config_dir() anchored under
             // CC_SWITCH_TEST_HOME and makes import exercise its safety backup.
-            let config_dir = temp_dir.path().join(".cc-switch");
+            let config_dir = temp_dir.path().join(crate::config::APP_CONFIG_DIR_NAME);
             std::fs::create_dir_all(&config_dir).expect("create isolated config directory");
-            std::fs::File::create(config_dir.join("cc-switch.db"))
+            std::fs::File::create(config_dir.join(crate::config::APP_DB_FILE_NAME))
                 .expect("create isolated database sentinel");
             let guard = Self {
                 previous_test_home,
@@ -1270,7 +1290,7 @@ mod tests {
             // 真正拦下来的必须是 authorizer。
             let malicious = format!(
                 "{}\n{}\n",
-                super::CC_SWITCH_SQL_EXPORT_HEADER,
+                super::SQL_EXPORT_HEADER,
                 template.replace("{path}", &target.to_string_lossy().replace('\'', "''"))
             );
 
@@ -1390,14 +1410,16 @@ mod tests {
 
         let header_only = format!(
             "{}\nPRAGMA foreign_keys=OFF;\nBEGIN TRANSACTION;\nCOMMIT;\n",
-            super::CC_SWITCH_SQL_EXPORT_HEADER
+            super::SQL_EXPORT_HEADER
         );
         let error = target
             .import_sql_string(&header_only)
             .expect_err("缺少原始 schema 的文件必须被拒绝");
         assert!(
-            error.to_string().contains("required CC Switch tables")
-                || error.to_string().contains("CC Switch 必需表"),
+            error
+                .to_string()
+                .contains("required 星火无限token tables")
+                || error.to_string().contains("星火无限token 必需表"),
             "应由原始 schema 校验拒绝，实际错误: {error}"
         );
 
@@ -1506,7 +1528,7 @@ mod tests {
 
         let invalid_sql = format!(
             "{}\nBEGIN TRANSACTION;\nCREATE TABLE partial (id INTEGER);\nTHIS IS NOT SQL;\n",
-            super::CC_SWITCH_SQL_EXPORT_HEADER
+            super::SQL_EXPORT_HEADER
         );
         assert!(target.import_sql_string(&invalid_sql).is_err());
 
@@ -1542,7 +1564,7 @@ mod tests {
         let exported = source.export_sql_string()?;
         let truncated = exported
             .strip_suffix("COMMIT;\nPRAGMA foreign_keys=ON;\n")
-            .expect("CC Switch export should end with a committed transaction");
+            .expect("SQL export should end with a committed transaction");
 
         let target = Database::memory()?;
         {
@@ -1590,7 +1612,7 @@ mod tests {
              INSERT INTO skills (key, installed, installed_at)
              VALUES ('claude:legacy-skill', 1, 1700000000);
              COMMIT;\nPRAGMA foreign_keys=ON;\n",
-            super::CC_SWITCH_SQL_EXPORT_HEADER,
+            super::SQL_EXPORT_HEADER,
             crate::database::tests::V3_8_SCHEMA_V1_SQL,
         );
 
@@ -2453,7 +2475,7 @@ mod tests {
                 entry
                     .file_name()
                     .to_string_lossy()
-                    .starts_with(".cc-switch-backup-")
+                    .starts_with(".xinghuo-token-backup-")
             })
             .count();
         assert_eq!(

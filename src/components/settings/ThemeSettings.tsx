@@ -1,8 +1,10 @@
 import { Monitor, Moon, Sun } from "lucide-react";
+import { useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "react-i18next";
 import { useTheme } from "@/components/theme-provider";
+import type { ThemeOrigin } from "@/lib/theme-transition";
 
 export function ThemeSettings() {
   const { t } = useTranslation();
@@ -19,21 +21,21 @@ export function ThemeSettings() {
       <div className="inline-flex gap-1 rounded-md border border-border-default bg-background p-1">
         <ThemeButton
           active={theme === "light"}
-          onClick={() => setTheme("light")}
+          onClick={(origin) => setTheme("light", origin)}
           icon={Sun}
         >
           {t("settings.themeLight")}
         </ThemeButton>
         <ThemeButton
           active={theme === "dark"}
-          onClick={() => setTheme("dark")}
+          onClick={(origin) => setTheme("dark", origin)}
           icon={Moon}
         >
           {t("settings.themeDark")}
         </ThemeButton>
         <ThemeButton
           active={theme === "system"}
-          onClick={() => setTheme("system")}
+          onClick={(origin) => setTheme("system", origin)}
           icon={Monitor}
         >
           {t("settings.themeSystem")}
@@ -45,7 +47,7 @@ export function ThemeSettings() {
 
 interface ThemeButtonProps {
   active: boolean;
-  onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  onClick: (origin: ThemeOrigin) => void;
   icon: React.ComponentType<{ className?: string }>;
   children: React.ReactNode;
 }
@@ -56,10 +58,26 @@ function ThemeButton({
   icon: Icon,
   children,
 }: ThemeButtonProps) {
+  const press = useRef<ThemeOrigin>();
   return (
     <Button
       type="button"
-      onClick={onClick}
+      onPointerDown={(event) => {
+        if (event.button === 0)
+          press.current = { x: event.clientX, y: event.clientY };
+      }}
+      onPointerCancel={() => {
+        press.current = undefined;
+      }}
+      onClick={(event) => {
+        const rect = event.currentTarget.getBoundingClientRect();
+        const origin =
+          event.detail === 0
+            ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+            : (press.current ?? { x: event.clientX, y: event.clientY });
+        press.current = undefined;
+        onClick(origin);
+      }}
       size="sm"
       variant={active ? "default" : "ghost"}
       className={cn(

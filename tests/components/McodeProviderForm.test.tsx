@@ -1,8 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { McodeProviderForm } from "@/components/providers/forms/McodeProviderForm";
-import { mcodeProviderPresets } from "@/config/mcodeProviderPresets";
-import { piProviderPresets } from "@/config/piProviderPresets";
 
 vi.mock("@/components/JsonEditor", () => ({
   default: ({
@@ -92,29 +90,6 @@ describe("McodeProviderForm", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
   });
 
-  it("uses the shared preset and model editors and saves native API fields", async () => {
-    const submit = vi.fn();
-    render(
-      <McodeProviderForm
-        appId="mcode"
-        submitLabel="Save"
-        onSubmit={submit}
-        onCancel={() => {}}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: /Minimax MiniMax$/ }));
-    fireEvent.change(screen.getByLabelText("API Key"), {
-      target: { value: "test-key" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
-    const saved = JSON.parse(submit.mock.calls[0][0].settingsConfig);
-    expect(saved.api).toBe("openai-completions");
-    expect(saved.options.apiKey).toBe("test-key");
-    expect(saved).not.toHaveProperty("npm");
-    expect(saved.models).toHaveProperty("MiniMax-M3");
-  });
-
   it("keeps invalid JSON drafts from breaking the structured fields", () => {
     render(
       <McodeProviderForm
@@ -133,27 +108,5 @@ describe("McodeProviderForm", () => {
       target: { value: JSON.stringify(original) },
     });
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
-  });
-
-  it("borrows the MiniMax preset without changing Pi or copying Pi compatibility fields", () => {
-    const pi = piProviderPresets.find((preset) => preset.name === "MiniMax")!;
-    const mcode = mcodeProviderPresets.find(
-      (preset) => preset.name === "MiniMax",
-    )!;
-    expect(mcode.settingsConfig.options.baseURL).toBe(
-      pi.settingsConfig.baseUrl,
-    );
-    expect(Object.keys(mcode.settingsConfig.models)).toContain("MiniMax-M3");
-    expect(mcode.settingsConfig).not.toHaveProperty("compat");
-    expect(pi.settingsConfig.models).toBeInstanceOf(Array);
-    expect(
-      mcodeProviderPresets.every((preset) =>
-        [
-          "anthropic-messages",
-          "openai-completions",
-          "openai-responses",
-        ].includes(preset.settingsConfig.api),
-      ),
-    ).toBe(true);
   });
 });

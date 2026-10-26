@@ -44,7 +44,7 @@ pub struct VisibleApps {
     pub opencode: bool,
     #[serde(default = "default_true")]
     pub openclaw: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub hermes: bool,
     #[serde(default = "default_true")]
     pub pi: bool,
@@ -62,7 +62,7 @@ impl Default for VisibleApps {
             grokbuild: true,
             opencode: true,
             openclaw: true,
-            hermes: false, // 默认不显示，需用户手动启用
+            hermes: true,
             pi: true,
             mcode: true,
         }
@@ -71,14 +71,17 @@ impl Default for VisibleApps {
 
 impl VisibleApps {
     /// Check if the specified app is visible
+    ///
+    /// 星火客户端的激活流程已覆盖全部十个平台（与前端 `APP_IDS` + `MORE_PLATFORM_IDS`
+    /// 一致），各应用是否显示由设置项决定。
     pub fn is_visible(&self, app: &AppType) -> bool {
         match app {
             AppType::Claude => self.claude,
             AppType::ClaudeDesktop => self.claude_desktop,
             AppType::Codex => self.codex,
+            AppType::OpenCode => self.opencode,
             AppType::Gemini => self.gemini,
             AppType::GrokBuild => self.grokbuild,
-            AppType::OpenCode => self.opencode,
             AppType::OpenClaw => self.openclaw,
             AppType::Hermes => self.hermes,
             AppType::Pi => self.pi,
@@ -106,7 +109,7 @@ pub struct WebDavSyncStatus {
 }
 
 fn default_remote_root() -> String {
-    "cc-switch-sync".to_string()
+    "xinghuo-token-sync".to_string()
 }
 fn default_profile() -> String {
     "default".to_string()
@@ -580,7 +583,7 @@ impl AppSettings {
         // settings.json 保留用于旧版本迁移和无数据库场景
         Some(
             crate::config::get_home_dir()
-                .join(".cc-switch")
+                .join(crate::config::APP_CONFIG_DIR_NAME)
                 .join("settings.json"),
         )
     }
@@ -1194,18 +1197,30 @@ mod tests {
     use crate::app_config::AppType;
 
     #[test]
-    fn visible_apps_old_settings_default_claude_desktop_visible() {
+    fn visible_apps_only_show_supported_apps() {
         let visible: VisibleApps = serde_json::from_value(serde_json::json!({
             "claude": true,
+            "claude-desktop": true,
             "codex": true,
-            "gemini": true,
+            "gemini": false,
             "opencode": true,
-            "openclaw": true,
+            "openclaw": false,
             "hermes": true
         }))
         .expect("visible apps");
 
+        assert!(visible.is_visible(&AppType::Claude));
+        assert!(visible.is_visible(&AppType::Codex));
+        assert!(visible.is_visible(&AppType::OpenCode));
         assert!(visible.is_visible(&AppType::ClaudeDesktop));
+        assert!(!visible.is_visible(&AppType::Gemini));
+        assert!(!visible.is_visible(&AppType::OpenClaw));
+        assert!(visible.is_visible(&AppType::Hermes));
+
+        let defaults: VisibleApps =
+            serde_json::from_value(serde_json::json!({})).expect("empty visible apps");
+        assert!(defaults.claude && defaults.codex && defaults.opencode);
+        assert!(defaults.gemini && defaults.claude_desktop && defaults.pi);
     }
 
     #[test]

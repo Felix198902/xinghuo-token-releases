@@ -9,7 +9,7 @@ pub enum AppError {
     Config(String),
     #[error("无效输入: {0}")]
     InvalidInput(String),
-    /// Native files changed after CC Switch last read them.
+    /// Native files changed after 星火无限token last read them.
     #[error("并发冲突: {0}")]
     Conflict(String),
     #[error("IO 错误: {path}: {source}")]
@@ -59,7 +59,7 @@ pub enum AppError {
     Database(String),
     #[error("OMO 配置文件不存在")]
     OmoConfigNotFound,
-    #[error("所有供应商已熔断，无可用渠道")]
+    #[error("所有供应商已熔断，暂无可用服务")]
     AllProvidersCircuitOpen,
     #[error("未配置供应商")]
     NoProvidersConfigured,

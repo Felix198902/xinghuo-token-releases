@@ -34,7 +34,7 @@ pub fn reset_test_fs() {
     for sub in [
         ".claude",
         ".codex",
-        ".cc-switch",
+        ".xinghuo-token",
         ".gemini",
         ".grok",
         ".config",
@@ -49,6 +49,15 @@ pub fn reset_test_fs() {
         }
     }
     let claude_json = home.join(".claude.json");
+    for directory in ["Claude", "Claude-3p"] {
+        #[cfg(target_os = "macos")]
+        let path = home.join("Library/Application Support").join(directory);
+        #[cfg(windows)]
+        let path = home.join("AppData/Local").join(directory);
+        #[cfg(target_os = "linux")]
+        let path = home.join(".config").join(directory);
+        let _ = std::fs::remove_dir_all(path);
+    }
     if claude_json.exists() {
         let _ = std::fs::remove_file(&claude_json);
     }

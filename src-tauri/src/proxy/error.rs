@@ -32,7 +32,7 @@ pub enum ProxyError {
     #[error("无可用的Provider")]
     NoAvailableProvider,
 
-    #[error("所有供应商已熔断，无可用渠道")]
+    #[error("所有供应商已熔断，暂无可用服务")]
     AllProvidersCircuitOpen,
 
     #[error("未配置供应商")]

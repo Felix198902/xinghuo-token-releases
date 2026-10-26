@@ -21,7 +21,6 @@ use crate::store::AppState;
 use super::gemini_auth::{
     detect_gemini_auth_type, ensure_google_oauth_security_flag, GeminiAuthType,
 };
-use super::normalize_claude_models_in_value;
 
 /// ChatGPT Codex catalogs gpt-5.6 at a 372K context window with a ~353K
 /// effective budget (openai/codex#31860), far below the 1.05M API spec.
@@ -1267,17 +1266,17 @@ impl LiveSnapshot {
             LiveSnapshot::Codex { auth, config } => {
                 let auth_path = get_codex_auth_path();
                 let config_path = get_codex_config_path();
+                let prepared_config = crate::codex_config::prepare_codex_config_write(
+                    &config_path,
+                    config.as_deref().unwrap_or("").as_bytes(),
+                )?;
                 if let Some(value) = auth {
                     write_json_file(&auth_path, value)?;
                 } else if auth_path.exists() {
                     delete_file(&auth_path)?;
                 }
 
-                if let Some(text) = config {
-                    crate::config::write_text_file(&config_path, text)?;
-                } else if config_path.exists() {
-                    delete_file(&config_path)?;
-                }
+                crate::config::atomic_write_private(&config_path, &prepared_config)?;
             }
             LiveSnapshot::Gemini { env, .. } => {
                 use crate::gemini_config::{
@@ -1860,187 +1859,17 @@ pub fn read_live_settings(app_type: AppType) -> Result<Value, AppError> {
     }
 }
 
-/// Import default configuration from live files
-///
-/// Returns `Ok(true)` if a provider was actually imported,
-/// `Ok(false)` if skipped (providers already exist for this app).
-pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool, AppError> {
-    // Additive mode apps (OpenCode, OpenClaw) should use their dedicated
-    // import_xxx_providers_from_live functions, not this generic default config import
-    if app_type.is_additive_mode() {
-        return Ok(false);
-    }
-
-    // 允许 "只有官方 seed 预设" 的情况下继续导入 live：
-    // - 启动编排顺序是先 import 后 seed，新用户启动时 providers 为空，导入照常
-    // - 老用户已有非 seed provider，跳过导入（正确）
-    // - 用户手动点 ProviderEmptyState 的导入按钮时，与官方 seed 共存而不被阻塞
-    if state.db.has_non_official_seed_provider(app_type.as_str())? {
-        return Ok(false);
-    }
-
-    // 拒绝把"被代理接管的 Live"导入为供应商：接管期间 Live 里只有
-    // PROXY_MANAGED 占位符和本地代理地址，不是用户的真实配置。一旦导入，
-    // 它会成为 current provider（SSOT），后续"无备份恢复"路径会把占位符
-    // 当真实配置写回 Live，永久卡在已失效的本地代理上。
-    // 典型触发场景：代理接管开启时切换 app_config_dir 并重启，新数据库首启导入。
-    if state
-        .proxy_service
-        .detect_takeover_in_live_config_for_app(&app_type)
-    {
-        return Err(AppError::localized(
-            "provider.import.live_taken_over",
-            "Live 配置当前处于代理接管状态（包含占位符），不能导入为供应商。请先关闭代理接管或恢复 Live 配置后重试。",
-            "The live config is currently taken over by the proxy (contains placeholders) and cannot be imported as a provider. Disable proxy takeover or restore the live config first.",
-        ));
-    }
-
-    let settings_config = match app_type {
-        AppType::Codex => crate::codex_config::read_codex_live_settings()?,
-        AppType::GrokBuild => {
-            let mut settings = crate::grok_config::read_grok_live_settings()?;
-            let config = settings
-                .get("config")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            // 官方登录态（无自定义模型表）在这里必须报错：本函数也被启动
-            // 自动导入调用，而全项目惯例是"启动自动导入只产出 default，
-            // 从不产出官方条目"——否则删掉的官方条目每次重启都会复活。
-            // 官方态的成功导入（补官方条目并激活）只挂在手动导入的命令层
-            // （`import_default_config_internal`）。
-            crate::grok_config::validate_config_toml(config)?;
-            crate::grok_config::strip_grok_mcp_servers_from_settings(&mut settings)?;
-            settings
-        }
-        AppType::Claude => {
-            let settings_path = get_claude_settings_path();
-            if !settings_path.exists() {
-                return Err(AppError::localized(
-                    "claude.live.missing",
-                    "Claude Code 配置文件不存在",
-                    "Claude settings file is missing",
-                ));
-            }
-            let mut v = read_json_file::<Value>(&settings_path)?;
-            let _ = normalize_claude_models_in_value(&mut v);
-            v
-        }
-        AppType::ClaudeDesktop => {
-            return Err(AppError::localized(
-                "claude_desktop.import_unsupported",
-                "Claude Desktop 3P 配置不能通过通用导入读取，请使用“从 Claude 导入兼容供应商”。",
-                "Claude Desktop 3P config cannot be imported through the generic import flow. Use 'Import compatible providers from Claude' instead.",
-            ));
-        }
-        AppType::Gemini => {
-            use crate::gemini_config::{
-                env_to_json, get_gemini_env_path, get_gemini_settings_path, read_gemini_env,
-            };
-
-            // Read .env file (environment variables)
-            let env_path = get_gemini_env_path();
-            if !env_path.exists() {
-                return Err(AppError::localized(
-                    "gemini.live.missing",
-                    "Gemini 配置文件不存在",
-                    "Gemini configuration file is missing",
-                ));
-            }
-
-            let env_map = read_gemini_env()?;
-            let env_json = env_to_json(&env_map);
-            let env_obj = env_json.get("env").cloned().unwrap_or_else(|| json!({}));
-
-            // Read settings.json file (MCP config etc.)
-            let settings_path = get_gemini_settings_path();
-            let config_obj = if settings_path.exists() {
-                read_json_file(&settings_path)?
-            } else {
-                json!({})
-            };
-
-            // Return complete structure: { "env": {...}, "config": {...} }
-            json!({
-                "env": env_obj,
-                "config": config_obj
-            })
-        }
-        // OpenCode, OpenClaw and Hermes use additive mode and are handled by early return above
-        AppType::OpenCode | AppType::OpenClaw | AppType::Hermes | AppType::Pi | AppType::Mcode => {
-            unreachable!("additive mode apps are handled by early return")
-        }
-    };
-
-    let mut provider = Provider::with_id(
-        "default".to_string(),
-        "default".to_string(),
-        settings_config,
-        None,
-    );
-    provider.category = Some(
-        if matches!(app_type, AppType::Codex) {
-            let config_text = provider
-                .settings_config
-                .get("config")
-                .and_then(Value::as_str);
-            let has_provider_key = crate::codex_config::extract_codex_api_key(
-                provider.settings_config.get("auth"),
-                config_text,
-            )
-            .is_some();
-            let has_login_material = provider
-                .settings_config
-                .get("auth")
-                .is_some_and(crate::codex_config::codex_auth_has_login_material);
-
-            if has_login_material && !has_provider_key {
-                "official"
-            } else {
-                "custom"
-            }
-        } else {
-            "custom"
-        }
-        .to_string(),
-    );
-
-    state.db.save_provider(app_type.as_str(), &provider)?;
-    state
-        .db
-        .set_current_provider(app_type.as_str(), &provider.id)?;
-    crate::settings::set_current_provider(&app_type, Some(provider.id.as_str()))?;
-
-    // 初次导入已有配置时随手补出官方入口，对齐其它应用"首启动 = 导入 default
-    // + 播种官方条目"的观感。grokbuild 种子晚于 `official_providers_seeded`
-    // flag 引入，存量库的主播种不会再跑，只能挂在导入动作上补。
-    // 只在导入成功时执行；live 完全不可导入（文件缺失/语法错误/残缺配置）
-    // 不会到达这里。失败只 warn。
-    if matches!(app_type, AppType::GrokBuild) {
-        if let Err(e) = state.db.ensure_official_seed_by_id(
-            crate::database::GROKBUILD_OFFICIAL_PROVIDER_ID,
-            AppType::GrokBuild,
-        ) {
-            log::warn!("Failed to ensure grokbuild-official seed after import: {e}");
-        }
-    }
-
-    Ok(true) // 真正导入了
+/// 保留内部调用签名，星火客户端不再导入 default 供应商。
+pub fn import_default_config(_state: &AppState, _app_type: AppType) -> Result<bool, AppError> {
+    Ok(false)
 }
 
-/// Decide whether startup should auto-import the current live config as `default`.
-///
-/// This is intentionally stricter than the manual import path:
-/// if the app already has any provider row at all (including official seeds),
-/// startup must skip auto-import to avoid recreating `default` on each launch.
+/// 星火客户端只写入明确添加或激活的接口配置。
 pub fn should_import_default_config_on_startup(
-    state: &AppState,
-    app_type: &AppType,
+    _state: &AppState,
+    _app_type: &AppType,
 ) -> Result<bool, AppError> {
-    if app_type.is_additive_mode() {
-        return Ok(false);
-    }
-
-    Ok(!state.db.has_any_provider_for_app(app_type.as_str())?)
+    Ok(false)
 }
 
 /// Write Gemini live configuration with authentication handling
@@ -2147,7 +1976,7 @@ pub(crate) fn remove_opencode_provider_from_live(provider_id: &str) -> Result<()
 /// Import all providers from OpenCode live config to database
 ///
 /// This imports existing providers from ~/.config/opencode/opencode.json
-/// into the CC Switch database. Each provider found will be added to the
+/// into the 星火无限token database. Each provider found will be added to the
 /// database with is_current set to false.
 pub fn import_opencode_providers_from_live(state: &AppState) -> Result<usize, AppError> {
     use crate::opencode_config;
@@ -2222,7 +2051,7 @@ pub fn import_opencode_providers_from_live(state: &AppState) -> Result<usize, Ap
 /// Import all providers from OpenClaw live config to database
 ///
 /// This imports existing providers from ~/.openclaw/openclaw.json
-/// into the CC Switch database. Each provider found will be added to the
+/// into the 星火无限token database. Each provider found will be added to the
 /// database with is_current set to false.
 pub fn import_openclaw_providers_from_live(state: &AppState) -> Result<usize, AppError> {
     use crate::openclaw_config;
@@ -2310,7 +2139,7 @@ pub fn import_openclaw_providers_from_live(state: &AppState) -> Result<usize, Ap
 /// Import all providers from Hermes live config to database
 ///
 /// This imports existing providers from ~/.hermes/config.yaml
-/// into the CC Switch database. Each provider found will be added to the
+/// into the 星火无限token database. Each provider found will be added to the
 /// database with is_current set to false.
 pub fn import_hermes_providers_from_live(state: &AppState) -> Result<usize, AppError> {
     use crate::hermes_config;

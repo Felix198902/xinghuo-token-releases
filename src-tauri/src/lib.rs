@@ -37,8 +37,10 @@ mod settings;
 mod store;
 
 mod tray;
+mod update;
 mod usage_events;
 mod usage_script;
+pub mod xinghuo;
 
 pub use app_config::{AppType, InstalledSkill, McpApps, McpServer, MultiAppConfig, SkillApps};
 pub use codex_config::{
@@ -239,7 +241,7 @@ fn runtime_log_level_allows(level: log::Level, max_level: log::LevelFilter) -> b
     max_level.to_level().is_some_and(|maximum| level <= maximum)
 }
 
-/// 统一处理 ccswitch:// 深链接 URL
+/// 统一处理 xinghuo:// 深链接 URL
 ///
 /// - 解析 URL
 /// - 向前端发射 `deeplink-import` / `deeplink-error` 事件
@@ -250,7 +252,7 @@ fn handle_deeplink_url(
     focus_main_window: bool,
     source: &str,
 ) -> bool {
-    if !url_str.starts_with("ccswitch://") {
+    if !url_str.starts_with("xinghuo://") {
         return false;
     }
 
@@ -491,7 +493,7 @@ pub fn run() {
                             Target::new(TargetKind::Stdout),
                             Target::new(TargetKind::Folder {
                                 path: log_dir,
-                                file_name: Some("cc-switch".into()),
+                                file_name: Some("xinghuo-token".into()),
                             }),
                         ])
                         // KeepSome(4) 保留 4 个轮转归档，加上当前文件最多约 100 MiB。
@@ -504,27 +506,19 @@ pub fn run() {
 
                 // 用户配置存在数据库中，数据库尚未打开时使用保守的 Info 级别。
                 log::set_max_level(log::LevelFilter::Info);
-                log::info!("=== CC Switch v{} started ===", env!("CARGO_PKG_VERSION"));
+                log::info!("=== 星火无限token v{} started ===", env!("CARGO_PKG_VERSION"));
             }
 
             // 首次读取覆盖路径时 logger 尚未可用；此处重放一次，
             // 让 Store 损坏或路径无效等启动警告能够真正落盘。
             let _ = app_store::refresh_app_config_dir_override(app.handle());
 
+            // 旧版本可能留下悬空的 model_provider 引用（Codex 拒绝加载、
+            // ChatGPT 直接不可用）。启动时自愈一次，用户无需手工改配置。
+            crate::codex_config::repair_dangling_codex_model_provider_on_startup();
+
             #[cfg(target_os = "windows")]
             set_windows_app_user_model_id(app.handle());
-
-            // 注册 Updater 插件（桌面端）；放在 logger 之后，确保失败可诊断。
-            #[cfg(desktop)]
-            {
-                if let Err(e) = app
-                    .handle()
-                    .plugin(tauri_plugin_updater::Builder::new().build())
-                {
-                    // 若配置不完整（如缺少 pubkey），跳过 Updater 而不中断应用
-                    log::warn!("初始化 Updater 插件失败，已跳过：{e}");
-                }
-            }
 
             // 注入 AppHandle 给 usage_events，让无 AppHandle 持有的写日志路径
             // 也能向前端推送 `usage-log-recorded`。
@@ -533,7 +527,7 @@ pub fn run() {
 
             // 初始化数据库
             let app_config_dir = crate::config::get_app_config_dir();
-            let db_path = app_config_dir.join("cc-switch.db");
+            let db_path = app_config_dir.join(crate::config::APP_DB_FILE_NAME);
             let json_path = app_config_dir.join("config.json");
 
             // 检查是否需要从 config.json 迁移到 SQLite
@@ -724,63 +718,6 @@ pub fn run() {
                 Err(e) => log::warn!("✗ Failed to read skills migration flag: {e}"),
             }
 
-            // 1.5. 自动导入 live 配置 + seed 官方预设供应商（Claude / Codex / Gemini）
-            //
-            // 先 import 后 seed 是有意为之：先把用户手动配置的 settings.json / auth.json / .env
-            // 落成 "default" provider 设为 current，再追加官方预设（is_current=false）。
-            // 这样用户切到官方预设时，回填机制会保护原 live 配置不丢失。
-            //
-            // 捕获首次运行快照：所有全新装用户都会看到欢迎弹窗介绍 CC Switch 的工作方式。
-            // 读失败时默认不弹，宁可漏弹也不要因为故障打扰用户。
-            let first_run_already_confirmed = crate::settings::get_settings()
-                .first_run_notice_confirmed
-                .unwrap_or(false);
-            let fresh_install_at_startup =
-                app_state.db.is_providers_empty().unwrap_or(false);
-
-            for app_type in
-                crate::app_config::AppType::all().filter(|t| !t.is_additive_mode())
-            {
-                if !crate::services::provider::should_import_default_config_on_startup(
-                    &app_state,
-                    &app_type,
-                )
-                .unwrap_or(false)
-                {
-                    log::debug!(
-                        "○ {} already has providers; live import skipped",
-                        app_type.as_str()
-                    );
-                    continue;
-                }
-
-                match crate::services::provider::import_default_config(
-                    &app_state,
-                    app_type.clone(),
-                ) {
-                    Ok(true) => log::info!(
-                        "✓ Imported live config for {} as default provider",
-                        app_type.as_str()
-                    ),
-                    Ok(false) => log::debug!(
-                        "○ {} already has providers; live import skipped",
-                        app_type.as_str()
-                    ),
-                    Err(e) => log::debug!(
-                        "○ No live config to import for {}: {e}",
-                        app_type.as_str()
-                    ),
-                }
-            }
-
-            match app_state.db.init_default_official_providers() {
-                Ok(count) if count > 0 => {
-                    log::info!("✓ Seeded {count} official provider(s)");
-                }
-                Ok(_) => {}
-                Err(e) => log::warn!("✗ Failed to seed official providers: {e}"),
-            }
-
             {
                 let db_for_codex_history_migration = app_state.db.clone();
                 tauri::async_runtime::spawn_blocking(move || {
@@ -841,12 +778,6 @@ pub fn run() {
                         }
                     }
                 });
-            }
-
-            // 老用户 / 已确认的路径由 `fresh_install_at_startup` 自行拦截，这里不做写入。
-            // 字段只由前端在用户点击"我知道了"时 save_settings 回写，语义是"用户显式确认过"。
-            if !first_run_already_confirmed && fresh_install_at_startup {
-                log::info!("✓ First-run welcome notice pending");
             }
 
             // 1.6. 自动同步累加模式应用的原生 providers 到数据库
@@ -1036,13 +967,16 @@ pub fn run() {
                 #[cfg(target_os = "linux")]
                 {
                     // Use Tauri's path API to get correct path (includes app identifier)
-                    // tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop
+                    // tauri-plugin-deep-link writes to: ~/.local/share/applications/<exe name>-handler.desktop
                     // Only register if .desktop file doesn't exist to avoid overwriting user customizations
-                    let should_register = app
-                        .path()
-                        .data_dir()
-                        .map(|d| !d.join("applications/cc-switch-handler.desktop").exists())
-                        .unwrap_or(true);
+                    let handler_file = std::env::current_exe().ok().and_then(|exe| {
+                        exe.file_name()
+                            .map(|name| format!("{}-handler.desktop", name.to_string_lossy()))
+                    });
+                    let should_register = match (app.path().data_dir(), handler_file) {
+                        (Ok(d), Some(file)) => !d.join("applications").join(file).exists(),
+                        _ => true,
+                    };
 
                     if should_register {
                         if let Err(e) = app.deep_link().register_all() {
@@ -1084,7 +1018,7 @@ pub fn run() {
                         log::debug!("  URL[{i}]: {}", url_for_log(url_str));
 
                         if handle_deeplink_url(&app_handle, url_str, true, "on_open_url") {
-                            break; // Process only first ccswitch:// URL
+                            break; // Process only first xinghuo:// URL
                         }
                     }
                 }
@@ -1096,7 +1030,7 @@ pub fn run() {
 
             // 构建托盘
             let mut tray_builder = TrayIconBuilder::with_id(tray::TRAY_ID)
-                .tooltip("CC Switch") // 鼠标悬停提示
+                .tooltip("星火无限token") // 鼠标悬停提示
                 .on_tray_icon_event(|tray, event| match event {
                     // 鼠标悬停/点击到托盘图标时，后台异步刷新用量缓存，
                     // 让用户下一次（或快速打开菜单的那一刻）看到较新的数字。
@@ -1393,13 +1327,9 @@ pub fn run() {
             commands::delete_provider,
             commands::remove_provider_from_live_config,
             commands::switch_provider,
-            commands::import_default_config,
             commands::get_claude_desktop_status,
             commands::get_claude_desktop_default_routes,
             commands::import_claude_desktop_providers_from_claude,
-            commands::ensure_claude_desktop_official_provider,
-            commands::ensure_codex_official_provider,
-            commands::ensure_grokbuild_official_provider,
             commands::get_claude_config_status,
             commands::get_config_status,
             commands::get_claude_code_config_path,
@@ -1407,6 +1337,7 @@ pub fn run() {
             commands::open_config_folder,
             commands::pick_directory,
             commands::open_external,
+            update::check_app_update,
             commands::get_init_error,
             commands::get_migration_result,
             commands::get_skills_migration_result,
@@ -1432,9 +1363,14 @@ pub fn run() {
             commands::get_log_config,
             commands::set_log_config,
             commands::restart_app,
-            commands::install_update_and_restart,
-            commands::check_app_update_available,
-            commands::check_for_updates,
+            commands::get_xinghuo_activation,
+            commands::activate_xinghuo,
+            commands::use_xinghuo_app,
+            commands::discover_xinghuo_desktop_models,
+            commands::configure_xinghuo_desktop,
+            commands::refresh_xinghuo_status,
+            commands::deactivate_xinghuo,
+            commands::restore_xinghuo_config,
             commands::is_portable_mode,
             commands::copy_text_to_clipboard,
             commands::get_claude_plugin_status,
@@ -1815,7 +1751,7 @@ pub fn run() {
                         }
                     }
                 }
-                // 处理通过自定义 URL 协议触发的打开事件（例如 ccswitch://...）
+                // 处理通过自定义 URL 协议触发的打开事件（例如 xinghuo://...）
                 RunEvent::Opened { urls } => {
                     if let Some(url) = urls.first() {
                         let url_str = url.to_string();
@@ -1824,7 +1760,7 @@ pub fn run() {
                             url_for_log(&url_str)
                         );
 
-                        if url_str.starts_with("ccswitch://") {
+                        if url_str.starts_with("xinghuo://") {
                             if crate::lightweight::is_lightweight_mode() {
                                 if let Err(e) = crate::lightweight::exit_lightweight_mode(app_handle)
                                 {
@@ -1983,6 +1919,16 @@ async fn enabled_proxy_apps_on_startup(db: &database::Database) -> Vec<&'static 
 }
 
 async fn restore_proxy_state_on_startup(state: &store::AppState) {
+    // 桌面版使用独立网关，不接管 Claude Code 等工具的配置。
+    if crate::claude_desktop_config::get_status(state.db.as_ref(), false).is_ok_and(|status| {
+        status.configured
+            && status.mode == Some(crate::provider::ClaudeDesktopMode::Proxy)
+            && status.actual_base_url == status.expected_base_url
+    }) {
+        if let Err(error) = state.proxy_service.start().await {
+            log::error!("恢复 Claude Desktop 本地网关失败: {error}");
+        }
+    }
     // 收集需要恢复接管的应用列表（从 proxy_config.enabled 读取）
     let apps_to_restore = enabled_proxy_apps_on_startup(&state.db).await;
 
@@ -2123,7 +2069,7 @@ fn show_migration_error_dialog(app: &tauri::AppHandle, error: &str) -> bool {
         format!(
             "从旧版本迁移配置时发生错误：\n\n{error}\n\n\
             您的数据尚未丢失，旧配置文件仍然保留。\n\
-            建议回退到旧版本 CC Switch 以保护数据。\n\n\
+            建议回退到旧版本 星火无限token 以保护数据。\n\n\
             点击「重试」重新尝试迁移\n\
             点击「退出」关闭程序（可回退版本后重新打开）"
         )
@@ -2131,7 +2077,7 @@ fn show_migration_error_dialog(app: &tauri::AppHandle, error: &str) -> bool {
         format!(
             "An error occurred while migrating configuration:\n\n{error}\n\n\
             Your data is NOT lost - the old config file is still preserved.\n\
-            Consider rolling back to an older CC Switch version.\n\n\
+            Consider rolling back to an older 星火无限token version.\n\n\
             Click 'Retry' to attempt migration again\n\
             Click 'Exit' to close the program"
         )
@@ -2181,7 +2127,7 @@ fn show_database_init_error_dialog(
             您的数据尚未丢失，应用不会自动删除数据库文件。\n\
             常见原因包括：数据库版本过新、文件损坏、权限不足、磁盘空间不足等。\n\n\
             建议：\n\
-            1) 先备份整个配置目录（包含 cc-switch.db）\n\
+            1) 先备份整个配置目录（包含 xinghuo-token.db）\n\
             2) 如果提示“数据库版本过新”，请升级到更新版本\n\
             3) 如果刚升级出现异常，可回退旧版本导出/备份后再升级\n\n\
             点击「重试」重新尝试初始化\n\
@@ -2195,8 +2141,8 @@ fn show_database_init_error_dialog(
             Your data is NOT lost - the app will not delete the database automatically.\n\
             Common causes include: newer database version, corrupted file, permission issues, or low disk space.\n\n\
             Suggestions:\n\
-            1) Back up the entire config directory (including cc-switch.db)\n\
-            2) If you see “database version is newer”, please upgrade CC Switch\n\
+            1) Back up the entire config directory (including xinghuo-token.db)\n\
+            2) If you see “database version is newer”, please upgrade 星火无限token\n\
             3) If this happened right after upgrading, consider rolling back to export/backup then upgrade again\n\n\
             Click 'Retry' to attempt initialization again\n\
             Click 'Exit' to close the program",

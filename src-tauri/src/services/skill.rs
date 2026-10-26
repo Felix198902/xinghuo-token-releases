@@ -65,7 +65,7 @@ pub enum SyncMethod {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillStorageLocation {
-    /// CC Switch 管理目录 (~/.cc-switch/skills/)
+    /// 星火无限token 管理目录 (~/.cc-switch/skills/)
     #[default]
     CcSwitch,
     /// Agent Skills 统一标准目录 (~/.agents/skills/)
@@ -1054,7 +1054,7 @@ impl SkillService {
                     }
 
                     // Pi 目录可能包含用户自己维护的同名 Skill。删除 SSOT 前仅移除
-                    // 能验证为 CC Switch 部署的副本；其余路径保留并返回警告。
+                    // 能验证为 星火无限token 部署的副本；其余路径保留并返回警告。
                     if let Some(destination) = pi_removal_path {
                         let removal =
                             Self::remove_verified_pi_destination(&source, &destination, &directory);
@@ -2022,7 +2022,7 @@ impl SkillService {
 
     /// 扫描未管理的 Skills
     ///
-    /// 扫描各应用目录，找出未被 CC Switch 管理的 Skills
+    /// 扫描各应用目录，找出未被 星火无限token 管理的 Skills
     pub fn scan_unmanaged(db: &Arc<Database>) -> Result<Vec<UnmanagedSkill>> {
         let _state_guard = skill_state_read_guard();
         let managed_skills = db.get_all_installed_skills()?;
@@ -2086,7 +2086,7 @@ impl SkillService {
 
     /// 从应用目录导入 Skills
     ///
-    /// 将未管理的 Skills 导入到 CC Switch 统一管理
+    /// 将未管理的 Skills 导入到 星火无限token 统一管理
     pub fn import_from_apps(
         db: &Arc<Database>,
         imports: Vec<ImportSkillSelection>,
@@ -2681,7 +2681,7 @@ impl SkillService {
             .map(|skill| (skill.directory.to_lowercase(), skill))
             .collect();
 
-        // Unselected MCode directories may have been installed outside CC Switch.
+        // Unselected MCode directories may have been installed outside 星火无限token.
         // Explicit disable/uninstall handles removal of managed deployments.
         if app_dir.exists() && !matches!(app, AppType::Mcode) {
             for entry in fs::read_dir(&app_dir)? {
@@ -6326,7 +6326,7 @@ mod tests {
             .expect("migrate away from alias");
         let new_source = temp
             .path()
-            .join(".cc-switch")
+            .join(crate::config::APP_CONFIG_DIR_NAME)
             .join("skills")
             .join("test-skill");
         let pi_skill = temp
@@ -6441,8 +6441,11 @@ mod tests {
             .join("test-skill");
         fs::create_dir_all(pi_skill.parent().expect("Pi skills directory"))
             .expect("create Pi skills directory");
-        std::os::unix::fs::symlink(Path::new("../../.cc-switch/skills/test-skill"), &pi_skill)
-            .expect("create relative Pi symlink");
+        std::os::unix::fs::symlink(
+            Path::new("../../.xinghuo-token/skills/test-skill"),
+            &pi_skill,
+        )
+        .expect("create relative Pi symlink");
 
         let result = SkillService::migrate_storage(&db, SkillStorageLocation::Unified)
             .expect("migrate storage");
@@ -6733,10 +6736,10 @@ mod tests {
                 ("weread-skills", "skills", "."),
             ] {
                 let home = tempdir().expect("home");
-                let config_dir = home.path().join(".cc-switch");
+                let config_dir = home.path().join(crate::config::APP_CONFIG_DIR_NAME);
                 fs::create_dir_all(&config_dir).expect("isolated config directory");
                 // Keep Windows' legacy-HOME fallback out of this destructive test.
-                fs::File::create(config_dir.join("cc-switch.db"))
+                fs::File::create(config_dir.join(crate::config::APP_DB_FILE_NAME))
                     .expect("isolated database sentinel");
                 let _home = TestHomeGuard::set(home.path());
                 assert_eq!(crate::config::get_app_config_dir(), config_dir);

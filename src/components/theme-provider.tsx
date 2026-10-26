@@ -3,9 +3,12 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { flushSync } from "react-dom";
+import { transitionTheme, type ThemeOrigin } from "@/lib/theme-transition";
 
 type Theme = "light" | "dark" | "system";
 
@@ -17,7 +20,8 @@ interface ThemeProviderProps {
 
 interface ThemeContextValue {
   theme: Theme;
-  setTheme: (theme: Theme) => void;
+  resolvedTheme: "light" | "dark";
+  setTheme: (theme: Theme, origin?: ThemeOrigin) => void;
 }
 
 const ThemeProviderContext = createContext<ThemeContextValue | undefined>(
@@ -27,7 +31,7 @@ const ThemeProviderContext = createContext<ThemeContextValue | undefined>(
 export function ThemeProvider({
   children,
   defaultTheme = "system",
-  storageKey = "cc-switch-theme",
+  storageKey = "xinghuo-token-theme",
 }: ThemeProviderProps) {
   const getInitialTheme = () => {
     if (typeof window === "undefined") {
@@ -43,6 +47,14 @@ export function ThemeProvider({
   };
 
   const [theme, setThemeState] = useState<Theme>(getInitialTheme);
+  const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">(() =>
+    theme === "system"
+      ? window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light"
+      : theme,
+  );
+  const switching = useRef(false);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -65,10 +77,12 @@ export function ThemeProvider({
         window.matchMedia &&
         window.matchMedia("(prefers-color-scheme: dark)").matches;
       root.classList.add(isDark ? "dark" : "light");
+      setResolvedTheme(isDark ? "dark" : "light");
       return;
     }
 
     root.classList.add(theme);
+    setResolvedTheme(theme);
   }, [theme]);
 
   useEffect(() => {
@@ -85,6 +99,7 @@ export function ThemeProvider({
       const root = window.document.documentElement;
       root.classList.toggle("dark", mediaQuery.matches);
       root.classList.toggle("light", !mediaQuery.matches);
+      setResolvedTheme(mediaQuery.matches ? "dark" : "light");
     };
 
     if (theme === "system") {
@@ -130,12 +145,18 @@ export function ThemeProvider({
   const value = useMemo<ThemeContextValue>(
     () => ({
       theme,
-      setTheme: (nextTheme: Theme) => {
-        if (nextTheme === theme) return;
-        setThemeState(nextTheme);
+      resolvedTheme,
+      setTheme: (nextTheme: Theme, origin?: ThemeOrigin) => {
+        if (nextTheme === theme || switching.current) return;
+        switching.current = true;
+        void transitionTheme(() => {
+          flushSync(() => setThemeState(nextTheme));
+        }, origin).finally(() => {
+          switching.current = false;
+        });
       },
     }),
-    [theme],
+    [theme, resolvedTheme],
   );
 
   return (

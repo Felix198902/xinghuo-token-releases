@@ -17,7 +17,7 @@ use toml_edit::DocumentMut;
 
 pub const CC_SWITCH_CODEX_MODEL_PROVIDER_ID: &str = "custom";
 /// Temporary model-provider id used while the built-in `codex-official`
-/// provider is routed through CC Switch.  A dedicated id is an ownership
+/// provider is routed through 星火无限token.  A dedicated id is an ownership
 /// marker: unlike a generic localhost `base_url`, it can be detected and
 /// cleaned up without mistaking a user's own local provider for takeover.
 pub const CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID: &str = "cc-switch-official";
@@ -1056,6 +1056,8 @@ pub fn write_codex_live_atomic(
         toml::from_str::<toml::Table>(&cfg_text).map_err(|e| AppError::toml(&config_path, e))?;
     }
 
+    let cfg_text = prepare_codex_config_replacement(&cfg_text, &read_codex_config_text()?)?;
+
     // 第一步：写 auth.json
     write_json_file(&auth_path, auth)?;
 
@@ -1115,6 +1117,214 @@ pub(crate) fn is_custom_codex_model_provider_id(id: &str) -> bool {
     // Keep in sync with the frontend list in src/utils/providerConfigUtils.ts.
     let id = id.trim();
     !id.is_empty() && !CODEX_RESERVED_MODEL_PROVIDER_IDS.contains(&id)
+}
+
+/// Self-heal a Codex `config.toml` that carries a `model_provider` whose
+/// `[model_providers.<id>]` table is missing — the exact shape Codex rejects
+/// at load with "Model provider <id> not found", bricking ChatGPT.
+///
+/// Uses `toml::Value` (which normalises standard and inline tables alike) so
+/// the check is immune to the table-container syntax. Only custom ids are
+/// scrutinised: built-in ids (`openai`, `ollama`, …) are resolved by Codex
+/// without a user table. When a dangling reference is found the key is
+/// removed, letting Codex fall back to its built-in `openai` provider so the
+/// config always loads. This is a last-resort net: the inject/strip helpers
+/// are the primary defence, but any future regression that slips past them is
+/// caught here before the bytes hit disk.
+pub fn sanitize_dangling_codex_model_provider(config_text: &str) -> String {
+    if !config_text.contains("model_provider") {
+        return config_text.to_string();
+    }
+    let Ok(parsed) = config_text.parse::<toml::Value>() else {
+        // Invalid TOML — let the caller's syntax validation reject it.
+        return config_text.to_string();
+    };
+    let Some(id) = parsed
+        .get("model_provider")
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    else {
+        return config_text.to_string();
+    };
+    if !is_custom_codex_model_provider_id(id) {
+        return config_text.to_string();
+    }
+    let table_exists = parsed
+        .get("model_providers")
+        .and_then(toml::Value::as_table)
+        .and_then(|providers| providers.get(id))
+        .is_some();
+    if table_exists {
+        return config_text.to_string();
+    }
+    log::warn!(
+        "Codex config carried a dangling model_provider = \"{id}\" with no \
+         [model_providers.{id}] table; removing the reference so ChatGPT \
+         stays loadable (falls back to the built-in openai provider)"
+    );
+    let Ok(mut doc) = config_text.parse::<DocumentMut>() else {
+        return config_text.to_string();
+    };
+    doc.as_table_mut().remove("model_provider");
+    doc.to_string()
+}
+
+/// Byte-level guard for writers that restore `config.toml` from a snapshot
+/// instead of going through the live-write helpers (which already sanitize).
+///
+/// Protects the "restore an already-broken backup" path: a snapshot captured
+/// while the config was dangling would otherwise re-brick ChatGPT. Non-Codex
+/// paths and non-UTF-8 payloads pass through untouched so this stays a no-op
+/// for every other managed file.
+pub fn sanitize_codex_config_bytes(path: &Path, bytes: &[u8]) -> Vec<u8> {
+    if path != get_codex_config_path() {
+        return bytes.to_vec();
+    }
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return bytes.to_vec();
+    };
+    sanitize_dangling_codex_model_provider(text).into_bytes()
+}
+
+/// 所有 Codex 写盘入口共用校验；保留旧对话使用的星火 provider 标识。
+pub(crate) fn prepare_codex_config_write(path: &Path, bytes: &[u8]) -> Result<Vec<u8>, AppError> {
+    if path != get_codex_config_path() {
+        return Ok(bytes.to_vec());
+    }
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| AppError::Message("Codex 配置必须使用 UTF-8 编码".into()))?;
+    let previous = read_codex_config_text()?;
+    prepare_codex_config_replacement(text, &previous).map(String::into_bytes)
+}
+
+fn prepare_codex_config_replacement(text: &str, previous: &str) -> Result<String, AppError> {
+    let mut doc = text
+        .parse::<DocumentMut>()
+        .map_err(|e| AppError::Message(format!("Codex 配置无效，未写入: {e}")))?;
+    let previous: toml::Value = previous
+        .parse()
+        .unwrap_or(toml::Value::Table(Default::default()));
+    let old_custom = previous
+        .get("model_providers")
+        .and_then(|v| v.get(CC_SWITCH_CODEX_MODEL_PROVIDER_ID));
+    let was_managed = old_custom.is_some_and(|table| {
+        table.get("name").and_then(toml::Value::as_str) == Some("xinghuo")
+            || (table.as_table().is_some_and(|t| t.len() == 4)
+                && table.get("name").and_then(toml::Value::as_str) == Some("OpenAI")
+                && table
+                    .get("requires_openai_auth")
+                    .and_then(toml::Value::as_bool)
+                    == Some(true)
+                && table
+                    .get("supports_websockets")
+                    .and_then(toml::Value::as_bool)
+                    == Some(true)
+                && table.get("wire_api").and_then(toml::Value::as_str) == Some("responses"))
+    });
+    if was_managed
+        && doc
+            .get("model_providers")
+            .and_then(|v| v.as_table_like())
+            .and_then(|t| t.get(CC_SWITCH_CODEX_MODEL_PROVIDER_ID))
+            .is_none()
+    {
+        // 不改变当前选择，只让旧对话仍能通过原生 ChatGPT 登录继续。
+        if doc.get("model_providers").is_none() {
+            doc["model_providers"] = toml_edit::Item::Table(toml_edit::Table::new());
+        }
+        let providers = doc["model_providers"]
+            .as_table_like_mut()
+            .ok_or_else(|| AppError::Message("model_providers 必须是表，未写入配置".into()))?;
+        providers.insert(
+            CC_SWITCH_CODEX_MODEL_PROVIDER_ID,
+            toml_edit::Item::Table(codex_unified_official_provider_table()),
+        );
+    }
+    let output = doc.to_string();
+    let parsed: toml::Value = output
+        .parse()
+        .map_err(|e| AppError::Message(format!("Codex 配置无效，未写入: {e}")))?;
+    let validate = |scope: &toml::Value| -> Result<(), AppError> {
+        if let Some(id) = scope.get("model_provider") {
+            let id = id
+                .as_str()
+                .filter(|id| !id.trim().is_empty())
+                .ok_or_else(|| AppError::Message("model_provider 必须是非空字符串".into()))?;
+            if is_custom_codex_model_provider_id(id)
+                && !parsed
+                    .get("model_providers")
+                    .and_then(|providers| providers.get(id))
+                    .is_some_and(toml::Value::is_table)
+            {
+                return Err(AppError::Message(format!(
+                    "Model provider {id} not found；未修改原配置"
+                )));
+            }
+        }
+        Ok(())
+    };
+    validate(&parsed)?;
+    if let Some(profiles) = parsed.get("profiles").and_then(toml::Value::as_table) {
+        for profile in profiles.values() {
+            validate(profile)?;
+        }
+    }
+    Ok(output)
+}
+
+/// Startup self-heal for configs already broken by an older build.
+///
+/// The write-path guard only protects configs written from now on; a
+/// `config.toml` left dangling before the fix would stay dangling, keeping
+/// ChatGPT unusable until the user hand-edits it. Runs once per launch and
+/// rewrites only when the dangling shape is actually present.
+///
+/// Written with `atomic_write_private` (0600) rather than `write_text_file`:
+/// the file already exists with restrictive permissions and may carry provider
+/// tokens, so a repair must not loosen them.
+pub fn repair_dangling_codex_model_provider_on_startup() {
+    let path = get_codex_config_path();
+    let Ok(bytes) = std::fs::read(&path) else {
+        return;
+    };
+    let Ok(text) = String::from_utf8(bytes) else {
+        return;
+    };
+    let repaired = sanitize_dangling_codex_model_provider(&text);
+    // 旧版本留下的 custom 选择器同时影响已创建的对话，补表才能兼容 resume。
+    let repaired = if repaired != text
+        && text
+            .parse::<toml::Value>()
+            .ok()
+            .and_then(|v| {
+                v.get("model_provider")
+                    .and_then(toml::Value::as_str)
+                    .map(str::to_string)
+            })
+            .as_deref()
+            == Some(CC_SWITCH_CODEX_MODEL_PROVIDER_ID)
+    {
+        match inject_codex_unified_session_bucket(&text) {
+            Ok(config) => config,
+            Err(error) => {
+                log::error!("无法修复 Codex provider: {error}");
+                return;
+            }
+        }
+    } else {
+        repaired
+    };
+    if repaired == text {
+        return;
+    }
+    log::warn!(
+        "Codex config.toml has a dangling model_provider reference left by an \
+         older build; repairing it so ChatGPT can load the file"
+    );
+    if let Err(e) = crate::config::atomic_write_private(&path, repaired.as_bytes()) {
+        log::error!("Failed to repair Codex config.toml: {e}");
+    }
 }
 
 /// Write only Codex `config.toml` for provider switching.
@@ -3564,7 +3774,7 @@ pub fn apply_codex_official_proxy_route(
         }
     };
 
-    // Clean only CC Switch's placeholder from every stale provider table. Real
+    // Clean only 星火无限token's placeholder from every stale provider table. Real
     // user bearer tokens are preserved, as are all unrelated provider fields.
     remove_codex_proxy_placeholders_from_providers(&mut providers);
 
@@ -3579,7 +3789,7 @@ pub fn apply_codex_official_proxy_route(
     Ok(doc.to_string())
 }
 
-/// Whether a live Codex config is the official route projected by CC Switch.
+/// Whether a live Codex config is the official route projected by 星火无限token.
 pub fn codex_config_has_official_proxy_route(config_text: &str) -> bool {
     if !config_text.contains(CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID) {
         return false;
@@ -3596,7 +3806,7 @@ pub fn codex_config_has_official_proxy_route(config_text: &str) -> bool {
         == Some(CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID)
 }
 
-/// Remove only the official takeover route owned by CC Switch. This is a
+/// Remove only the official takeover route owned by 星火无限token. This is a
 /// last-resort crash cleanup when no live backup or provider SSOT is usable.
 pub fn remove_codex_official_proxy_route(config_text: &str) -> Result<String, AppError> {
     let mut doc = config_text
@@ -3624,7 +3834,9 @@ pub fn remove_codex_official_proxy_route(config_text: &str) -> Result<String, Ap
     Ok(doc.to_string())
 }
 
-fn table_matches_codex_unified_official_provider(table: &toml_edit::Table) -> bool {
+// `&dyn TableLike` (not `&Table`): `model_providers` may be an inline table,
+// and `as_table_like` yields a `TableLike` for both container syntaxes.
+fn table_matches_codex_unified_official_provider(table: &dyn toml_edit::TableLike) -> bool {
     table.len() == 4
         && table.get("name").and_then(|item| item.as_str()) == Some("OpenAI")
         && table
@@ -3652,15 +3864,26 @@ pub fn inject_codex_unified_session_bucket(config_text: &str) -> Result<String, 
         .parse::<DocumentMut>()
         .map_err(|e| AppError::Message(format!("Invalid Codex config.toml: {e}")))?;
 
-    if doc.get("model_provider").is_some() {
-        return Ok(config_text.to_string());
+    // Respect an explicit user routing to a DIFFERENT provider. If the config
+    // already carries model_provider = "custom" but the table was lost (the
+    // dangling-reference shape that bricks ChatGPT), fall through instead of
+    // skipping so the table is re-created below — self-heal, not skip.
+    if let Some(id) = active_codex_model_provider_id(&doc) {
+        if id != CC_SWITCH_CODEX_MODEL_PROVIDER_ID {
+            return Ok(config_text.to_string());
+        }
     }
 
+    // A pre-existing [model_providers.custom] table that doesn't match the
+    // official injection shape is a third-party template or user edit —
+    // activating it would route official OAuth traffic to an unknown endpoint.
+    // as_table_like (not as_table) so inline `model_providers = { … }` is
+    // inspected too: an inline custom entry that doesn't match must also block.
     let existing_custom_conflicts = doc
         .get("model_providers")
-        .and_then(|item| item.as_table())
+        .and_then(|item| item.as_table_like())
         .and_then(|providers| providers.get(CC_SWITCH_CODEX_MODEL_PROVIDER_ID))
-        .and_then(|item| item.as_table())
+        .and_then(|item| item.as_table_like())
         .is_some_and(|table| !table_matches_codex_unified_official_provider(table));
     if existing_custom_conflicts {
         log::warn!(
@@ -3675,6 +3898,23 @@ pub fn inject_codex_unified_session_bucket(config_text: &str) -> Result<String, 
         let mut parent = toml_edit::Table::new();
         parent.set_implicit(true);
         doc["model_providers"] = toml_edit::Item::Table(parent);
+    } else if doc["model_providers"].as_table().is_none() {
+        // model_providers exists as an inline table (`model_providers = { … }`).
+        // Convert to a standard table so we can insert a sub-table member —
+        // as_table_mut rejects inline tables, which previously caused
+        // model_provider = "custom" to be set WITHOUT the matching table
+        // (the "Model provider custom not found" brick).
+        if let Some(inline) = doc["model_providers"]
+            .as_value()
+            .and_then(|v| v.as_inline_table())
+        {
+            let mut standard = inline.clone().into_table();
+            // into_table() leaves the table implicit; it came from an explicit
+            // `model_providers = { … }` assignment, so it must be emitted.
+            standard.set_implicit(false);
+            standard.sort_values();
+            doc["model_providers"] = toml_edit::Item::Table(standard);
+        }
     }
     if let Some(providers) = doc["model_providers"].as_table_mut() {
         if !providers.contains_key(CC_SWITCH_CODEX_MODEL_PROVIDER_ID) {
@@ -3709,7 +3949,7 @@ pub fn strip_codex_unified_session_bucket(config_text: &str) -> Result<String, A
         .and_then(|item| item.as_table())
         .and_then(|providers| providers.get(CC_SWITCH_CODEX_MODEL_PROVIDER_ID))
         .and_then(|item| item.as_table())
-        .is_some_and(table_matches_codex_unified_official_provider);
+        .is_some_and(|t| table_matches_codex_unified_official_provider(t));
     if !matches_injected {
         return Ok(config_text.to_string());
     }
@@ -4629,6 +4869,166 @@ base_url = "https://relay.example/v1"
         let injected_once = inject_codex_unified_session_bucket("").expect("inject");
         let reinjected = inject_codex_unified_session_bucket(&injected_once).expect("re-inject");
         assert_eq!(reinjected, injected_once);
+    }
+
+    /// Regression: the original brick. `model_providers` written as an inline
+    /// table made `as_table_mut()` return `None`, so `model_provider = "custom"`
+    /// was set WITHOUT the matching table and Codex failed to load with
+    /// "Model provider custom not found".
+    #[test]
+    fn unified_session_bucket_creates_table_for_inline_model_providers() {
+        let inline = "model_providers = { openai = { name = \"OpenAI\" } }\n";
+        let injected = inject_codex_unified_session_bucket(inline).expect("inject");
+        let parsed: toml::Value = toml::from_str(&injected).expect("injected config must parse");
+
+        assert_eq!(
+            parsed.get("model_provider").and_then(|v| v.as_str()),
+            Some(CC_SWITCH_CODEX_MODEL_PROVIDER_ID)
+        );
+        // The whole point: the reference must resolve to a real table.
+        assert!(
+            parsed
+                .get("model_providers")
+                .and_then(|t| t.get(CC_SWITCH_CODEX_MODEL_PROVIDER_ID))
+                .is_some(),
+            "dangling model_provider reference: no [model_providers.custom] table"
+        );
+        // Pre-existing inline entries survive the container conversion.
+        assert!(parsed["model_providers"].get("openai").is_some());
+    }
+
+    /// An already-bricked config (`model_provider = "custom"` with the table
+    /// lost) must be repaired rather than skipped.
+    #[test]
+    fn unified_session_bucket_repairs_dangling_custom_reference() {
+        let dangling = "model_provider = \"custom\"\nmodel = \"gpt-5\"\n";
+        let repaired = inject_codex_unified_session_bucket(dangling).expect("inject");
+        let parsed: toml::Value = toml::from_str(&repaired).expect("repaired config must parse");
+
+        assert!(
+            parsed
+                .get("model_providers")
+                .and_then(|t| t.get(CC_SWITCH_CODEX_MODEL_PROVIDER_ID))
+                .is_some(),
+            "dangling reference was not self-healed"
+        );
+        assert!(parsed.get("model").is_some(), "unrelated keys must survive");
+    }
+
+    /// Last-resort net on the write path: nothing may reach disk carrying a
+    /// `model_provider` that points at a missing table.
+    #[test]
+    fn sanitize_dangling_model_provider_removes_only_broken_reference() {
+        let dangling = "model_provider = \"custom\"\nmodel = \"gpt-5\"\n";
+        let cleaned = sanitize_dangling_codex_model_provider(dangling);
+        assert!(!cleaned.contains("model_provider"));
+        assert!(cleaned.contains("model = \"gpt-5\""));
+
+        // Resolvable custom reference is left alone.
+        let valid = "model_provider = \"custom\"\n\n[model_providers.custom]\nname = \"OpenAI\"\n";
+        assert_eq!(sanitize_dangling_codex_model_provider(valid), valid);
+
+        // Built-in ids are resolved by Codex without a user table.
+        let builtin = "model_provider = \"openai\"\n";
+        assert_eq!(sanitize_dangling_codex_model_provider(builtin), builtin);
+
+        // Inline container syntax must be seen through as well.
+        let inline_valid =
+            "model_provider = \"custom\"\nmodel_providers = { custom = { name = \"OpenAI\" } }\n";
+        assert_eq!(
+            sanitize_dangling_codex_model_provider(inline_valid),
+            inline_valid
+        );
+    }
+
+    #[test]
+    fn startup_repairs_custom_definition_and_atomic_guard_preserves_original() {
+        let _home = CodexLiveTestHome::new();
+        let path = get_codex_config_path();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "model_provider = \"custom\"\nmodel = \"gpt-5.5\"\n").unwrap();
+        repair_dangling_codex_model_provider_on_startup();
+        let original = fs::read(&path).unwrap();
+        let parsed: toml::Value = std::str::from_utf8(&original).unwrap().parse().unwrap();
+        assert_eq!(parsed["model_provider"].as_str(), Some("custom"));
+        assert_eq!(
+            parsed["model_providers"]["custom"]["name"].as_str(),
+            Some("OpenAI")
+        );
+        assert!(parsed["model_providers"]["custom"]
+            .get("base_url")
+            .is_none());
+        for invalid in [
+            "model_provider = \"missing\"",
+            "[profiles.work]\nmodel_provider = \"missing\"",
+            "model = [",
+        ] {
+            assert!(crate::config::atomic_write_private(&path, invalid.as_bytes()).is_err());
+            assert_eq!(fs::read(&path).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn replacement_retains_custom_for_old_threads_without_switching_active_route() {
+        let previous =
+            "model_provider = \"custom\"\n[model_providers.custom]\nname = \"xinghuo\"\nbase_url = \"https://example.com/v1\"\nwire_api = \"responses\"\n".to_string();
+        for target in [
+            "",
+            "model = \"gpt-5.5\"\n",
+            "model_provider = \"openai\"\n",
+            "model_providers = { other = { name = \"Other\" } }\n",
+        ] {
+            let output = prepare_codex_config_replacement(target, &previous).unwrap();
+            let parsed: toml::Value = output.parse().unwrap();
+            assert_eq!(
+                parsed["model_providers"]["custom"]["name"].as_str(),
+                Some("OpenAI")
+            );
+            assert!(parsed["model_providers"]["custom"]
+                .get("base_url")
+                .is_none());
+            assert!(parsed["model_providers"]["custom"]
+                .get("experimental_bearer_token")
+                .is_none());
+            assert_eq!(
+                parsed.get("model_provider"),
+                target.parse::<toml::Value>().unwrap().get("model_provider")
+            );
+            assert_eq!(
+                prepare_codex_config_replacement(&output, &output).unwrap(),
+                output
+            );
+        }
+    }
+
+    #[test]
+    fn replacement_rejects_missing_provider_including_profiles() {
+        for text in [
+            "model_provider = \"missing\"",
+            "[profiles.work]\nmodel_provider = \"missing\"",
+            "model_provider = \"custom\"\nmodel_providers = { custom = 1 }",
+            "model = [",
+        ] {
+            assert!(prepare_codex_config_replacement(text, "").is_err());
+        }
+        let valid = "model_provider = \"openai\"\n";
+        assert_eq!(prepare_codex_config_replacement(valid, "").unwrap(), valid);
+    }
+
+    #[test]
+    fn sanitize_codex_config_bytes_only_touches_codex_config() {
+        let dangling = b"model_provider = \"custom\"\n";
+
+        // Non-Codex managed files pass through untouched.
+        let other = Path::new("/tmp/.codex/auth.json");
+        assert_eq!(
+            sanitize_codex_config_bytes(other, dangling),
+            dangling.to_vec()
+        );
+
+        let cleaned = sanitize_codex_config_bytes(&get_codex_config_path(), dangling);
+        let cleaned = String::from_utf8(cleaned).expect("utf8");
+        assert!(!cleaned.contains("model_provider"));
     }
 
     #[test]
@@ -8201,7 +8601,7 @@ model = "glm-5"
 
     #[test]
     fn set_catalog_json_some_preserves_user_owned_catalog() {
-        // When CC Switch generates a catalog (Some arm), it must still respect a
+        // When 星火无限token generates a catalog (Some arm), it must still respect a
         // user-managed external catalog file instead of clobbering it with the
         // cc-switch-owned filename. Only an absent or cc-switch-owned pointer is
         // claimed; this mirrors the None arm's ownership rule.

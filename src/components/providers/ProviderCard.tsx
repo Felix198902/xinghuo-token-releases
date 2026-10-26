@@ -41,6 +41,7 @@ import { useUsageQuery } from "@/lib/query/queries";
 import { resolveProviderIcon } from "@/utils/providerIcon";
 import { ProviderStatusBadge } from "@/components/providers/ProviderStatusBadge";
 import { isAdditiveAppId, isProxyAppId } from "@/config/appConfig";
+import { isXinghuoProvider } from "@/lib/api/xinghuo";
 
 interface DragHandleProps {
   attributes: DraggableAttributes;
@@ -717,7 +718,10 @@ export function ProviderCard({
                 (isOfficial && !supportsOfficialSubscription) ||
                 isCopilot ||
                 (isCodexOauth && !isBoundCodexOfficial) ||
-                isXaiOauth
+                isXaiOauth ||
+                // 星火客户端：第三方 / 自定义供应商的用量模板全是其他站点（NewAPI、
+                // 各家 Coding Plan 等），只给自家供应商和官方订阅额度开入口。
+                (!isOfficial && !isXinghuoProvider(provider))
                   ? undefined
                   : () => onConfigureUsage(provider)
               }

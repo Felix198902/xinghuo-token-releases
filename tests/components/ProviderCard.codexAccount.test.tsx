@@ -332,3 +332,46 @@ describe("ProviderCard Codex Official account identity", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+describe("ProviderCard usage entry in the 星火 client", () => {
+  const usageScript = {
+    enabled: true,
+    language: "javascript" as const,
+    code: "",
+    templateType: "xinghuo" as never,
+    autoQueryInterval: 5,
+  };
+
+  it("opens usage configuration for the 星火 provider", async () => {
+    const user = userEvent.setup();
+    const onConfigureUsage = vi.fn();
+    const provider: Provider = {
+      id: "xinghuo-codex",
+      name: "星火无限token",
+      category: "third_party",
+      settingsConfig: { auth: {}, config: "" },
+      meta: { usage_script: usageScript },
+    };
+
+    renderCard(provider, { isCurrent: true, onConfigureUsage });
+
+    await user.click(screen.getByRole("button", { name: "configure-usage" }));
+    expect(onConfigureUsage).toHaveBeenCalledWith(provider);
+  });
+
+  it("hides usage configuration for other third-party providers", () => {
+    renderCard({
+      id: "other-relay",
+      name: "Other Relay",
+      category: "third_party",
+      settingsConfig: {
+        auth: { OPENAI_API_KEY: "sk-other" },
+        config: 'base_url = "https://relay.example.com/v1"',
+      },
+    });
+
+    expect(
+      screen.queryByRole("button", { name: "configure-usage" }),
+    ).not.toBeInTheDocument();
+  });
+});

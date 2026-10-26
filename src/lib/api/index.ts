@@ -10,6 +10,7 @@ export { skillsApi } from "./skills";
 export { usageApi } from "./usage";
 export { subscriptionApi } from "./subscription";
 export { vscodeApi } from "./vscode";
+export { xinghuoApi } from "./xinghuo";
 export { proxyApi } from "./proxy";
 export { openclawApi } from "./openclaw";
 export { sessionsApi } from "./sessions";

@@ -2,8 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Download,
   Copy,
-  ExternalLink,
-  Github,
   Globe,
   Info,
   Loader2,
@@ -27,15 +25,15 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { getVersion } from "@tauri-apps/api/app";
 import { settingsApi } from "@/lib/api";
+import { checkAppUpdate } from "@/lib/api/update";
 import type {
   ToolInstallation,
   ToolInstallationReport,
 } from "@/lib/api/settings";
-import { useUpdate } from "@/contexts/UpdateContext";
 import { Badge } from "@/components/ui/badge";
 import { motion } from "framer-motion";
 import appIcon from "@/assets/icons/app-icon.png";
-import { APP_ICON_MAP } from "@/config/appConfig";
+import { APP_ICON_MAP, APP_IDS } from "@/config/appConfig";
 import type { AppId } from "@/lib/api/types";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { isWindows } from "@/lib/platform";
@@ -111,68 +109,20 @@ const ENV_BADGE_CONFIG: Record<
 const posixScriptInstallCommand = (url: string) =>
   `bash -c 'tmp=$(mktemp) && curl -fsSL ${url} -o $tmp && bash $tmp; status=$?; rm -f $tmp; exit $status'`;
 
-const HERMES_WINDOWS_INSTALL_SCRIPT =
-  "irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1 | iex";
-
-const powershellEncodedCommand = (script: string): string => {
-  let binary = "";
-  for (let i = 0; i < script.length; i += 1) {
-    const code = script.charCodeAt(i);
-    binary += String.fromCharCode(code & 0xff, code >> 8);
-  }
-  return btoa(binary);
-};
-
-const HERMES_WINDOWS_INSTALL_COMMAND = `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${powershellEncodedCommand(
-  HERMES_WINDOWS_INSTALL_SCRIPT,
-)}`;
-
-const MCODE_WINDOWS_INSTALL_COMMAND = `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${powershellEncodedCommand(
-  "irm https://filecdn.minimax.chat/public/install.ps1 | iex",
-)}`;
-
-// 与后端 npm_install_command_for("mcode") 保持一致：npm 12 默认拦截依赖的 install
-// 脚本，不放行 better-sqlite3 时 SQLite 不可用。
-const MCODE_NPM_INSTALL_COMMAND =
-  'npm i -g @minimax-ai/code@latest --ignore-scripts=false --include=optional "--allow-scripts=@minimax-ai/code,better-sqlite3"';
-
+// 一键安装只列星火客户端服务的三个工具（与 SHOWN_TOOL_NAMES 一致）。
 const POSIX_ONE_CLICK_INSTALL_COMMANDS = `# Claude Code
 ${posixScriptInstallCommand("https://claude.ai/install.sh")} || npm i -g @anthropic-ai/claude-code@latest
 # Codex
 npm i -g @openai/codex@latest
-# Gemini CLI
-npm i -g @google/gemini-cli@latest
-# Grok Build
-npm i -g @xai-official/grok@latest
 # OpenCode
-${posixScriptInstallCommand("https://opencode.ai/install")} || npm i -g opencode-ai@latest
-# OpenClaw
-npm i -g openclaw@latest
-# Hermes
-${posixScriptInstallCommand("https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh")}
-# Pi
-npm i -g @earendil-works/pi-coding-agent@latest
-# MiniMax Code
-${posixScriptInstallCommand("https://filecdn.minimax.chat/public/install.sh")} || ${MCODE_NPM_INSTALL_COMMAND}`;
+${posixScriptInstallCommand("https://opencode.ai/install")} || npm i -g opencode-ai@latest`;
 
 const WINDOWS_ONE_CLICK_INSTALL_COMMANDS = `# Claude Code
 npm i -g @anthropic-ai/claude-code@latest
 # Codex
 npm i -g @openai/codex@latest
-# Gemini CLI
-npm i -g @google/gemini-cli@latest
-# Grok Build
-npm i -g @xai-official/grok@latest
 # OpenCode
-npm i -g opencode-ai@latest
-# OpenClaw
-npm i -g openclaw@latest
-# Hermes
-${HERMES_WINDOWS_INSTALL_COMMAND}
-# Pi
-npm i -g @earendil-works/pi-coding-agent@latest
-# MiniMax Code
-${MCODE_WINDOWS_INSTALL_COMMAND}`;
+npm i -g opencode-ai@latest`;
 
 const ONE_CLICK_INSTALL_COMMANDS = isWindows()
   ? WINDOWS_ONE_CLICK_INSTALL_COMMANDS
@@ -207,6 +157,11 @@ const TOOL_APP_IDS: Record<ToolName, AppId> = {
   pi: "pi",
   mcode: "mcode",
 };
+
+/** 「本地环境」只列星火客户端服务的工具（Claude Code、Codex、OpenCode）。 */
+const SHOWN_TOOL_NAMES: ToolName[] = TOOL_NAMES.filter((name) =>
+  APP_IDS.includes(TOOL_APP_IDS[name]),
+);
 
 // 工具版本探测代价高：每个工具一次 `--version` 子进程 + 一次 npm/github/pypi 网络请求。
 // 设置页用 Radix Tabs，非激活 Tab 会被卸载——每次切回「关于」都重挂 AboutSection，若都
@@ -244,7 +199,6 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
   const [isLoadingVersion, setIsLoadingVersion] = useState(
     () => appVersionCache === null,
   );
-  const [isDownloading, setIsDownloading] = useState(false);
   const [toolVersions, setToolVersions] = useState<ToolVersion[]>(
     () => toolVersionsCache?.data ?? [],
   );
@@ -260,9 +214,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
     null,
   );
   const [showInstallCommands, setShowInstallCommands] = useState(false);
-
-  const { hasUpdate, updateInfo, checkUpdate, resetDismiss, isChecking } =
-    useUpdate();
+  const [checkingAppUpdate, setCheckingAppUpdate] = useState(false);
 
   const [wslShellByTool, setWslShellByTool] = useState<
     Record<string, WslShellPreference>
@@ -300,7 +252,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
 
   const updatableToolNames = useMemo(
     () =>
-      TOOL_NAMES.filter((toolName) => {
+      SHOWN_TOOL_NAMES.filter((toolName) => {
         const tool = toolVersionByName.get(toolName);
         return isUpdateAvailable(tool?.version, tool?.latest_version);
       }),
@@ -375,7 +327,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
         // Versions 已内建按 name 合并 + per-tool loading + try/catch 兜底（单工具失败返回 []
         // 不拖累其余），故 Promise.all 永不 reject。Respect current shell/flag overrides.
         await Promise.all(
-          TOOL_NAMES.map((toolName) =>
+          SHOWN_TOOL_NAMES.map((toolName) =>
             refreshToolVersions([toolName], wslShellByTool),
           ),
         );
@@ -450,89 +402,6 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ... (handlers like handleOpenReleaseNotes, handleCheckUpdate) ...
-
-  const handleOpenReleaseNotes = useCallback(async () => {
-    try {
-      const targetVersion = updateInfo?.availableVersion ?? version ?? "";
-      const displayVersion = targetVersion.startsWith("v")
-        ? targetVersion
-        : targetVersion
-          ? `v${targetVersion}`
-          : "";
-
-      if (!displayVersion) {
-        await settingsApi.openExternal(
-          "https://github.com/farion1231/cc-switch/releases",
-        );
-        return;
-      }
-
-      await settingsApi.openExternal(
-        `https://github.com/farion1231/cc-switch/releases/tag/${displayVersion}`,
-      );
-    } catch (error) {
-      console.error("[AboutSection] Failed to open release notes", error);
-      toast.error(t("settings.openReleaseNotesFailed"));
-    }
-  }, [t, updateInfo?.availableVersion, version]);
-
-  const handleOpenGithub = useCallback(() => {
-    void settingsApi.openExternal("https://github.com/farion1231/cc-switch");
-  }, []);
-
-  const handleCheckUpdate = useCallback(async () => {
-    if (hasUpdate) {
-      if (isPortable) {
-        try {
-          await settingsApi.checkUpdates();
-        } catch (error) {
-          console.error("[AboutSection] Portable update failed", error);
-        }
-        return;
-      }
-
-      setIsDownloading(true);
-      try {
-        resetDismiss();
-        const installed = await settingsApi.installUpdateAndRestart();
-        if (!installed) {
-          toast.success(t("settings.upToDate"), { closeButton: true });
-        }
-      } catch (error) {
-        console.error("[AboutSection] Update failed", error);
-        toast.error(t("settings.updateFailed"), {
-          description: extractErrorMessage(error) || undefined,
-          closeButton: true,
-        });
-        try {
-          await settingsApi.checkUpdates();
-        } catch (fallbackError) {
-          console.error(
-            "[AboutSection] Failed to open fallback updater",
-            fallbackError,
-          );
-        }
-      } finally {
-        setIsDownloading(false);
-      }
-      return;
-    }
-
-    try {
-      const available = await checkUpdate();
-      if (!available) {
-        toast.success(t("settings.upToDate"), { closeButton: true });
-      }
-    } catch (error) {
-      console.error("[AboutSection] Check update failed", error);
-      toast.error(t("settings.checkUpdateFailed"), {
-        description: extractErrorMessage(error) || undefined,
-        closeButton: true,
-      });
-    }
-  }, [checkUpdate, hasUpdate, isPortable, resetDismiss, t]);
-
   const handleCopyInstallCommands = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(ONE_CLICK_INSTALL_COMMANDS);
@@ -572,7 +441,9 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
   const handleDiagnoseAll = useCallback(async () => {
     setIsDiagnosingAll(true);
     try {
-      const reports = await settingsApi.probeToolInstallations([...TOOL_NAMES]);
+      const reports = await settingsApi.probeToolInstallations([
+        ...SHOWN_TOOL_NAMES,
+      ]);
       const next: Partial<Record<ToolName, ToolInstallation[]>> = {};
       let conflicts = 0;
       for (const report of reports) {
@@ -888,6 +759,35 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
 
   const handleCancelUpgrade = useCallback(() => setPendingUpgrade(null), []);
 
+  const handleCheckAppUpdate = useCallback(async () => {
+    if (checkingAppUpdate) return;
+    setCheckingAppUpdate(true);
+    try {
+      const result = await checkAppUpdate();
+      if (result.available) {
+        toast.success(
+          t("settings.updateAvailable", { version: result.latestVersion }),
+          {
+            action: {
+              label: t("settings.appUpdateDownload"),
+              onClick: () => void settingsApi.openExternal(result.downloadUrl),
+            },
+            closeButton: true,
+          },
+        );
+      } else {
+        toast.success(t("settings.upToDate"), { closeButton: true });
+      }
+    } catch (error) {
+      toast.error(t("settings.checkUpdateFailed"), {
+        description: extractErrorMessage(error),
+        closeButton: true,
+      });
+    } finally {
+      setCheckingAppUpdate(false);
+    }
+  }, [checkingAppUpdate, t]);
+
   const displayVersion = version ?? t("common.unknown");
 
   // 任一安装/升级进行中（批量或单工具）即视为忙碌：用于禁用所有操作按钮，
@@ -923,9 +823,9 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
           <div className="flex items-center gap-8">
             <div className="flex flex-col items-center gap-2">
               <div className="flex items-center gap-2">
-                <img src={appIcon} alt="CC Switch" className="h-5 w-5" />
+                <img src={appIcon} alt="星火无限token" className="h-5 w-5" />
                 <h4 className="text-lg font-semibold text-foreground">
-                  CC Switch
+                  星火无限token
                 </h4>
               </div>
               <div className="flex items-center gap-2">
@@ -949,111 +849,38 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
             </div>
           </div>
 
-          <p className="min-w-0 flex-1 text-xs leading-relaxed sm:text-right">
-            <a
-              href="https://github.com/farion1231/cc-switch"
-              onClick={(event) => {
-                event.preventDefault();
-                handleOpenGithub();
-              }}
-              className="font-medium text-primary hover:underline"
-            >
-              {t("settings.starPrompt")}
-            </a>
-            <span aria-hidden="true" className="ml-1.5">
-              👉
-            </span>
-          </p>
-
           <div className="flex items-center gap-2">
             <Button
               type="button"
               variant="outline"
               size="sm"
-              onClick={handleOpenGithub}
-              className="h-8 gap-1.5 border-primary/30 bg-primary/10 text-xs text-primary hover:bg-primary/20 hover:text-primary"
+              onClick={handleCheckAppUpdate}
+              disabled={checkingAppUpdate}
+              className="h-8 gap-1.5 text-xs"
             >
-              <Github className="h-3.5 w-3.5" />
-              {t("settings.github")}
-              <span
-                aria-hidden="true"
-                className="inline-block animate-[spin_4s_linear_infinite] motion-reduce:animate-none"
-              >
-                ⭐
-              </span>
+              {checkingAppUpdate ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+              {checkingAppUpdate
+                ? t("settings.checking")
+                : t("settings.checkForUpdates")}
             </Button>
             <Button
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => settingsApi.openExternal("https://ccswitch.io")}
+              onClick={() =>
+                settingsApi.openExternal("https://ai.wfpromax.xyz")
+              }
               className="h-8 gap-1.5 text-xs"
             >
               <Globe className="h-3.5 w-3.5" />
               {t("settings.officialWebsite")}
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={handleOpenReleaseNotes}
-              className="h-8 gap-1.5 text-xs"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              {t("settings.releaseNotes")}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleCheckUpdate}
-              disabled={isChecking || isDownloading}
-              className="h-8 gap-1.5 text-xs"
-            >
-              {isDownloading ? (
-                <>
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  {t("settings.updating")}
-                </>
-              ) : hasUpdate ? (
-                <>
-                  <Download className="h-3.5 w-3.5" />
-                  {t("settings.updateTo", {
-                    version: updateInfo?.availableVersion ?? "",
-                  })}
-                </>
-              ) : isChecking ? (
-                <>
-                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                  {t("settings.checking")}
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="h-3.5 w-3.5" />
-                  {t("settings.checkForUpdates")}
-                </>
-              )}
-            </Button>
           </div>
         </div>
-
-        {hasUpdate && updateInfo && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            className="rounded-lg bg-primary/10 border border-primary/20 px-4 py-3 text-sm"
-          >
-            <p className="font-medium text-primary mb-1">
-              {t("settings.updateAvailable", {
-                version: updateInfo.availableVersion,
-              })}
-            </p>
-            {updateInfo.notes && (
-              <p className="text-muted-foreground line-clamp-3 leading-relaxed">
-                {updateInfo.notes}
-              </p>
-            )}
-          </motion.div>
-        )}
       </motion.div>
 
       <div className="space-y-3">
@@ -1115,7 +942,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
         </div>
 
         <div className="grid gap-3 px-1 sm:grid-cols-2 xl:grid-cols-3">
-          {TOOL_NAMES.map((toolName, index) => {
+          {SHOWN_TOOL_NAMES.map((toolName, index) => {
             const tool = toolVersionByName.get(toolName);
             const appConfig = APP_ICON_MAP[TOOL_APP_IDS[toolName]];
             const displayName = TOOL_DISPLAY_NAMES[toolName];

@@ -898,11 +898,11 @@ export function CodexFormFields({
               {isGrokBuild
                 ? t("grokBuild.advancedSectionHint", {
                     defaultValue:
-                      "包含上游格式、思考能力与自定义 User-Agent。使用 Chat Completions / Anthropic Messages 协议的供应商需开启路由接管才能使用。",
+                      "包含接口格式、思考能力与自定义 User-Agent。使用 Chat Completions / Anthropic Messages 协议的供应商需开启路由接管才能使用。",
                   })
                 : t("codexConfig.advancedSectionHint", {
                     defaultValue:
-                      "包含上游格式、模型映射、思考能力与自定义 User-Agent。使用 Chat Completions 协议的供应商需开启路由接管才能使用。",
+                      "包含接口格式、模型映射、思考能力与自定义 User-Agent。使用 Chat Completions 协议的供应商需开启路由接管才能使用。",
                   })}
             </p>
           )}
@@ -915,7 +915,7 @@ export function CodexFormFields({
                 <div className="space-y-1.5">
                   <FormLabel htmlFor="codex-upstream-format">
                     {t("codexConfig.upstreamFormatLabel", {
-                      defaultValue: "上游格式",
+                      defaultValue: "接口格式",
                     })}
                   </FormLabel>
                   <Select
@@ -992,7 +992,7 @@ export function CodexFormFields({
                     <p className="text-xs leading-relaxed text-muted-foreground">
                       {t("codexConfig.anthropicAuthFieldHint", {
                         defaultValue:
-                          "选择网关接收 API Key 的请求头：ANTHROPIC_AUTH_TOKEN 发送 Authorization: Bearer；ANTHROPIC_API_KEY 发送 x-api-key。两者只发其一。",
+                          "选择服务端接收 API Key 的请求头：ANTHROPIC_AUTH_TOKEN 发送 Authorization: Bearer；ANTHROPIC_API_KEY 发送 x-api-key。两者只发其一。",
                       })}
                     </p>
                   </div>
@@ -1009,7 +1009,7 @@ export function CodexFormFields({
                       <p className="text-xs leading-relaxed text-muted-foreground">
                         {t("codexConfig.impersonateClaudeCodeHint", {
                           defaultValue:
-                            "网关或其上游限制只能通过 Claude Code 使用时开启：伪装 User-Agent、anthropic-beta、x-app 请求头，并在系统提示首行注入 Claude Code 身份。",
+                            "服务端限制只能通过 Claude Code 使用时开启：伪装 User-Agent、anthropic-beta、x-app 请求头，并在系统提示首行注入 Claude Code 身份。",
                         })}
                       </p>
                     </div>
@@ -1049,11 +1049,11 @@ export function CodexFormFields({
                       {isGrokBuild
                         ? t("grokBuild.maxOutputTokensHint", {
                             defaultValue:
-                              "默认上限 8192 容易在长回答或深度思考时被截断（stop_reason=max_tokens）。此处设置会作为 Anthropic 的 max_tokens 覆盖请求值。请勿超过该模型/网关的真实输出上限，否则可能 400。留空使用默认 8192。",
+                              "默认上限 8192 容易在长回答或深度思考时被截断（stop_reason=max_tokens）。此处设置会作为 Anthropic 的 max_tokens 覆盖请求值。请勿超过该模型/服务端的真实输出上限，否则可能 400。留空使用默认 8192。",
                           })
                         : t("codexConfig.maxOutputTokensHint", {
                             defaultValue:
-                              "Codex 不会把 model_max_output_tokens 写进请求体，默认上限 8192 容易在长回答或深度思考时被截断（stop_reason=max_tokens）。此处设置会作为 Anthropic 的 max_tokens 覆盖请求值。请勿超过该模型/网关的真实输出上限，否则可能 400。留空使用默认 8192。",
+                              "Codex 不会把 model_max_output_tokens 写进请求体，默认上限 8192 容易在长回答或深度思考时被截断（stop_reason=max_tokens）。此处设置会作为 Anthropic 的 max_tokens 覆盖请求值。请勿超过该模型/服务端的真实输出上限，否则可能 400。留空使用默认 8192。",
                           })}
                     </p>
                   </div>
@@ -1106,7 +1106,7 @@ export function CodexFormFields({
                   <p className="text-xs leading-relaxed text-muted-foreground">
                     {t("codexConfig.promptCacheRoutingHint", {
                       defaultValue:
-                        "自动模式仅对已确认兼容的上游发送 prompt_cache_key；开启可用于其他兼容网关，关闭可避免严格网关因未知字段返回 400。只使用客户端提供的稳定会话 ID。",
+                        "自动模式仅对已确认兼容的服务端发送 prompt_cache_key；开启可用于其他兼容服务端，关闭可避免严格校验的服务端因未知字段返回 400。只使用客户端提供的稳定会话 ID。",
                     })}
                   </p>
                 </div>
@@ -1135,7 +1135,7 @@ export function CodexFormFields({
                     <p className="text-xs leading-relaxed text-muted-foreground">
                       {t("codexConfig.reasoningModeHint", {
                         defaultValue:
-                          "上游 Chat Completions 接口支持开启或关闭 thinking 时启用。Kimi、GLM、Qwen 等通常属于这一类。",
+                          "服务端的 Chat Completions 接口支持开启或关闭 thinking 时启用。",
                       })}
                     </p>
                   </div>
@@ -1159,11 +1159,11 @@ export function CodexFormFields({
                       {isGrokBuild
                         ? t("grokBuild.reasoningEffortHint", {
                             defaultValue:
-                              "上游支持 low/high/max 等思考深度控制时启用。启用后会自动启用思考模式，并把请求中的 reasoning effort 转成上游 Chat 参数。",
+                              "服务端支持 low/high/max 等思考深度控制时启用。启用后会自动启用思考模式，并把请求中的 reasoning effort 转成 Chat 接口参数。",
                           })
                         : t("codexConfig.reasoningEffortHint", {
                             defaultValue:
-                              "上游支持 low/high/max 等思考深度控制时启用。启用后会自动启用思考模式，并把 Codex 的 reasoning.effort 转成上游 Chat 参数。",
+                              "服务端支持 low/high/max 等思考深度控制时启用。启用后会自动启用思考模式，并把 Codex 的 reasoning.effort 转成 Chat 接口参数。",
                           })}
                     </p>
                   </div>
@@ -1206,7 +1206,7 @@ export function CodexFormFields({
                   <p className="text-xs leading-relaxed text-muted-foreground">
                     {t("codexConfig.modelMappingHint", {
                       defaultValue:
-                        "选择模型角色后，CC Switch 会自动生成 Codex 兼容路由；菜单显示名可以填 DeepSeek、Kimi 等品牌模型，实际请求模型按右侧填写内容发送。",
+                        "选择模型角色后，星火无限token 会自动生成 Codex 兼容路由；菜单显示名可以填 DeepSeek、Kimi 等品牌模型，实际请求模型按右侧填写内容发送。",
                     })}
                   </p>
                 </div>

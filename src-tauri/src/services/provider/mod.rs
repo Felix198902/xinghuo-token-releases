@@ -40,8 +40,9 @@ pub(crate) use live::{
     build_effective_provider_for_live_with_codex_oauth_manager,
     build_effective_settings_with_common_config, normalize_provider_common_config_for_storage,
     provider_exists_in_live_config, strip_common_config_from_live_settings,
-    sync_current_provider_for_app_to_live, write_live_with_common_config_for_codex_oauth_manager,
-    write_live_with_common_config_for_state, LiveSyncOutcome,
+    sync_current_provider_for_app_to_live, write_live_snapshot,
+    write_live_with_common_config_for_codex_oauth_manager, write_live_with_common_config_for_state,
+    LiveSyncOutcome,
 };
 
 // Internal re-exports
@@ -5041,7 +5042,11 @@ impl ProviderService {
             }
             return Ok(saved);
         }
-        state.db.get_all_providers(app_type.as_str())
+        let mut providers = state.db.get_all_providers(app_type.as_str())?;
+        providers.retain(|id, provider| {
+            id != "default" && provider.category.as_deref() != Some("official")
+        });
+        Ok(providers)
     }
 
     /// Get current provider ID
@@ -5088,10 +5093,23 @@ impl ProviderService {
         provider: Provider,
         add_to_live: bool,
     ) -> Result<bool, AppError> {
+        if provider.category.as_deref() == Some("official") || provider.id == "default" {
+            return Err(AppError::Message(
+                "星火客户端不支持官方或 default 供应商".into(),
+            ));
+        }
         if app_type == AppType::Pi {
             return pi::add(state, provider, add_to_live);
         }
 
+        if add_to_live
+            && provider
+                .settings_config
+                .to_string()
+                .contains(&crate::xinghuo::site_url())
+        {
+            crate::xinghuo::restore::capture(state, &app_type)?;
+        }
         let mut provider = provider;
         // Normalize Claude model keys
         Self::normalize_provider_if_claude(&app_type, &mut provider);
@@ -5720,6 +5738,20 @@ impl ProviderService {
             .get(id)
             .ok_or_else(|| AppError::Message(format!("供应商 {id} 不存在")))?;
 
+        if id == "default" || _provider.category.as_deref() == Some("official") {
+            return Err(AppError::Message(
+                "星火客户端不支持官方或 default 供应商".into(),
+            ));
+        }
+
+        if _provider
+            .settings_config
+            .to_string()
+            .contains(&crate::xinghuo::site_url())
+        {
+            crate::xinghuo::restore::capture(state, &app_type)?;
+        }
+
         // OMO providers are switched through their own exclusive path.
         if matches!(app_type, AppType::OpenCode) && _provider.category.as_deref() == Some("omo") {
             return Self::switch_normal(state, app_type, id, &providers);
@@ -5842,7 +5874,7 @@ impl ProviderService {
             .and_then(Self::managed_codex_oauth_account_id);
         let mut backfill_completed = false;
         if let Some(current_id) = current_id {
-            if current_id != id {
+            if current_id != id && current_id != "default" {
                 // Additive mode apps - all providers coexist in the same file,
                 // no backfill needed (backfill is for exclusive mode apps like Claude/Codex/Gemini)
                 if !app_type.is_additive_mode() {

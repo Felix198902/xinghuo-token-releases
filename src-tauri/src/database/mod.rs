@@ -32,9 +32,10 @@ mod schema;
 mod tests;
 
 // DAO 类型导出供外部使用
+#[cfg(test)]
+pub(crate) use dao::providers_seed::GROKBUILD_OFFICIAL_PROVIDER_ID;
 pub(crate) use dao::providers_seed::{
     is_official_seed_id, CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID, CODEX_OFFICIAL_PROVIDER_ID,
-    GROKBUILD_OFFICIAL_PROVIDER_ID,
 };
 pub(crate) use dao::proxy::{
     validate_cost_multiplier, validate_pricing_source, PRICING_SOURCE_REQUEST,
@@ -98,7 +99,7 @@ impl Database {
     ///
     /// 数据库文件位于 `~/.cc-switch/cc-switch.db`
     pub fn init() -> Result<Self, AppError> {
-        let db_path = get_app_config_dir().join("cc-switch.db");
+        let db_path = get_app_config_dir().join(crate::config::APP_DB_FILE_NAME);
         let db_exists = db_path.exists();
 
         // 确保父目录存在

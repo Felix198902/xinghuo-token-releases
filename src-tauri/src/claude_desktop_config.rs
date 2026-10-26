@@ -11,8 +11,8 @@ use crate::database::CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID;
 use crate::error::AppError;
 use crate::provider::{ClaudeDesktopMode, Provider};
 
-pub const PROFILE_ID: &str = "00000000-0000-4000-8000-000000157210";
-pub const PROFILE_NAME: &str = "CC Switch";
+pub const PROFILE_ID: &str = "6c7deebe-cb64-4e27-a595-8bced6690cd4";
+pub const PROFILE_NAME: &str = "星火无限token";
 
 #[cfg(any(target_os = "macos", windows, target_os = "linux", test))]
 const CONFIG_FILE: &str = "claude_desktop_config.json";
@@ -130,6 +130,51 @@ pub fn apply_provider(db: &Database, provider: &Provider) -> Result<(), AppError
     apply_provider_to_paths(db, provider, &paths)
 }
 
+/// 只读核对实际配置，不能仅凭激活记录判断接入成功。
+pub fn is_proxy_provider_applied(db: &Database, provider: &Provider) -> Result<bool, AppError> {
+    proxy_provider_applied_at_paths(db, provider, &current_platform_paths()?)
+}
+
+fn proxy_provider_applied_at_paths(
+    db: &Database,
+    provider: &Provider,
+    paths: &ClaudeDesktopPaths,
+) -> Result<bool, AppError> {
+    if provider_mode(provider) != ClaudeDesktopMode::Proxy {
+        return Ok(false);
+    }
+    let Some(token) = db.get_setting(GATEWAY_TOKEN_SETTING_KEY)? else {
+        return Ok(false);
+    };
+    if token.trim().is_empty()
+        || read_applied_id(&paths.meta_path).as_deref() != Some(PROFILE_ID)
+        || !meta_has_profile_entry(&paths.meta_path)
+    {
+        return Ok(false);
+    }
+    for path in [&paths.normal_config_path, &paths.threep_config_path] {
+        if read_json_or_empty(path)?["deploymentMode"] != json!("3p") {
+            return Ok(false);
+        }
+    }
+    let specs = proxy_model_routes(provider)?
+        .into_iter()
+        .map(|route| InferenceModelSpec {
+            name: route.route_id,
+            label_override: route.label_override,
+            supports_1m: route.supports_1m,
+        })
+        .collect::<Vec<_>>();
+    let expected =
+        build_gateway_profile(&proxy_gateway_base_url_from_db(db)?, &token, Some(&specs));
+    let actual = read_json_or_empty(&paths.profile_path)?;
+    Ok(expected.as_object().is_some_and(|fields| {
+        fields
+            .iter()
+            .all(|(key, value)| actual.get(key) == Some(value))
+    }))
+}
+
 pub fn get_status(db: &Database, proxy_running: bool) -> Result<ClaudeDesktopStatus, AppError> {
     if !is_supported_platform() {
         return Ok(ClaudeDesktopStatus {
@@ -213,6 +258,17 @@ pub fn get_config_library_path() -> Result<PathBuf, AppError> {
     Ok(current_platform_paths()?.config_library_path)
 }
 
+/// 桌面接入涉及的全部文件，供激活流程保存原始配置。
+pub fn managed_config_paths() -> Result<Vec<PathBuf>, AppError> {
+    let paths = current_platform_paths()?;
+    Ok(vec![
+        paths.normal_config_path,
+        paths.threep_config_path,
+        paths.profile_path,
+        paths.meta_path,
+    ])
+}
+
 pub fn default_proxy_routes() -> Vec<ClaudeDesktopDefaultRoute> {
     DEFAULT_PROXY_ROUTES.to_vec()
 }
@@ -260,11 +316,48 @@ pub fn is_claude_safe_model_id(model: &str) -> bool {
         })
 }
 
+// 显示标签与调用 ID 分开，兼容旧配置把原始 ID 保存为 labelOverride 的情况。
+fn model_display_name(model: &str) -> String {
+    static PATTERN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let pattern = PATTERN.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)^claude[- ]+(opus|sonnet|haiku|fable)[- ]+(\d{1,2})(?:[.-](\d{1,2}))?($|[- ].*)",
+        )
+        .expect("valid Claude display pattern")
+    });
+    let normalized = model.strip_prefix("anthropic/").unwrap_or(model);
+    let Some(parts) = pattern.captures(normalized) else {
+        return model.to_string();
+    };
+    let family = parts[1].to_ascii_lowercase();
+    let mut display = format!(
+        "Claude {}{} {}",
+        family[..1].to_ascii_uppercase(),
+        &family[1..],
+        &parts[2]
+    );
+    if let Some(minor) = parts.get(3) {
+        display.push('.');
+        display.push_str(minor.as_str());
+    }
+    let suffix = parts[4]
+        .replace('-', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !suffix.is_empty() {
+        display.push(' ');
+        display.push_str(&suffix);
+    }
+    display
+}
+
 fn inference_model_json(spec: &InferenceModelSpec) -> Value {
-    if spec.supports_1m || spec.label_override.is_some() {
+    let display = model_display_name(spec.label_override.as_deref().unwrap_or(&spec.name));
+    if spec.supports_1m || spec.label_override.is_some() || display != spec.name {
         let mut item = json!({ "name": spec.name });
-        if let Some(label_override) = spec.label_override.as_deref() {
-            item["labelOverride"] = json!(label_override);
+        if spec.label_override.is_some() || display != spec.name {
+            item["labelOverride"] = json!(display);
         }
         if spec.supports_1m {
             item["supports1m"] = json!(true);
@@ -656,6 +749,7 @@ pub fn model_list_response(provider: &Provider) -> Result<Value, AppError> {
             let mut item = json!({
                 "type": "model",
                 "id": model_id,
+                "display_name": model_display_name(route.label_override.as_deref().unwrap_or(&route.route_id)),
                 "created_at": DEFAULT_CREATED_AT,
             });
             if route.supports_1m {
@@ -751,6 +845,31 @@ pub fn map_proxy_request_model(mut body: Value, provider: &Provider) -> Result<V
         normalize_mimo_anthropic_thinking_history(&mut body);
     }
     Ok(body)
+}
+
+pub(crate) fn normalize_proxy_chat_text(body: &mut Value) {
+    let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for message in messages {
+        let Some(parts) = message.get("content").and_then(Value::as_array) else {
+            continue;
+        };
+        if parts.is_empty()
+            || !parts.iter().all(|part| {
+                part.get("type").and_then(Value::as_str) == Some("text")
+                    && part.get("text").and_then(Value::as_str).is_some()
+            })
+        {
+            continue;
+        }
+        // 部分中转接口忽略文本数组；仅合并纯文本，保留多模态和工具字段。
+        message["content"] = json!(parts
+            .iter()
+            .filter_map(|part| part.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n\n"));
+    }
 }
 
 fn strip_one_m_suffix_for_route_lookup(model: &str) -> &str {
@@ -1030,7 +1149,7 @@ fn build_gateway_profile(
 ) -> Value {
     let mut profile = json!({
         "coworkEgressAllowedHosts": ["*"],
-        "disableDeploymentModeChooser": true,
+        "disableDeploymentModeChooser": false,
         "inferenceGatewayApiKey": api_key,
         "inferenceGatewayAuthScheme": "bearer",
         "inferenceGatewayBaseUrl": base_url,
@@ -1246,7 +1365,7 @@ fn current_platform_paths() -> Result<ClaudeDesktopPaths, AppError> {
 /// not expose a directory override or attempt to recover a host-custom
 /// XDG_CONFIG_HOME: Flatpak replaces that variable with its private path, so
 /// its original host value is not available reliably from the sandbox. Users
-/// with a custom host XDG_CONFIG_HOME should run the native CC Switch package.
+/// with a custom host XDG_CONFIG_HOME should run the native 星火无限token package.
 #[cfg(target_os = "linux")]
 fn linux_config_dir() -> PathBuf {
     let xdg_config_home = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
@@ -1593,7 +1712,7 @@ mod tests {
         );
         assert_eq!(profile["inferenceGatewayApiKey"], json!("test-token"));
         assert_eq!(profile["inferenceGatewayAuthScheme"], json!("bearer"));
-        assert_eq!(profile["disableDeploymentModeChooser"], json!(true));
+        assert_eq!(profile["disableDeploymentModeChooser"], json!(false));
         assert_eq!(profile["coworkEgressAllowedHosts"], json!(["*"]));
         assert!(profile.get("inferenceModels").is_none());
         assert_eq!(meta["appliedId"], json!(PROFILE_ID));
@@ -1602,6 +1721,29 @@ mod tests {
             .expect("entries")
             .iter()
             .any(|entry| entry["id"] == json!(PROFILE_ID) && entry["name"] == json!(PROFILE_NAME)));
+    }
+
+    #[test]
+    fn claude_desktop_chat_text_normalization_preserves_media_and_tools() {
+        let mut body = json!({"messages": [
+            {"role":"system","content":"desktop instructions"},
+            {"role":"user","content":[{"type":"text","text":"reminder"},{"type":"text","text":"17+25"}]},
+            {"role":"user","content":[{"type":"text","text":"image"},{"type":"image_url","image_url":{"url":"https://example.com/image.png"}}]},
+            {"role":"assistant","content":[{"type":"text","text":"a"},{"type":"text","text":"b"}],"tool_calls":[{"id":"call_1","type":"function","function":{"name":"test","arguments":"{}"}}]},
+            {"role":"tool","tool_call_id":"call_1","content":"42"},
+            {"role":"user","content":[{"type":"text","text":null}]}
+        ]});
+        let original = body.clone();
+        normalize_proxy_chat_text(&mut body);
+        assert_eq!(body["messages"][1]["content"], json!("reminder\n\n17+25"));
+        assert_eq!(body["messages"][3]["content"], json!("a\n\nb"));
+        for index in [0, 2, 4, 5] {
+            assert_eq!(body["messages"][index], original["messages"][index]);
+        }
+        assert_eq!(
+            body["messages"][3]["tool_calls"],
+            original["messages"][3]["tool_calls"]
+        );
     }
 
     #[test]
@@ -1620,7 +1762,7 @@ mod tests {
         );
         assert_eq!(
             profile["inferenceModels"],
-            json!([{ "name": "claude-sonnet-4-6", "supports1m": true }])
+            json!([{ "name": "claude-sonnet-4-6", "labelOverride": "Claude Sonnet 4.6", "supports1m": true }])
         );
     }
 
@@ -1693,6 +1835,45 @@ mod tests {
                 json!([{ "name": "claude-sonnet-4-6", "labelOverride": "GPT-5.4" }])
             );
         }
+    }
+
+    #[test]
+    fn claude_desktop_display_labels_keep_route_ids_and_custom_labels() {
+        for (id, label) in [
+            ("claude-fable-5-1", "Claude Fable 5.1"),
+            ("claude-opus-4-8", "Claude Opus 4.8"),
+            ("claude-opus-5", "Claude Opus 5"),
+            ("claude-opus-5-5", "Claude Opus 5.5"),
+            ("claude-sonnet-5-5", "Claude Sonnet 5.5"),
+        ] {
+            assert_eq!(model_display_name(id), label);
+            for saved_label in [None, Some(id.to_string())] {
+                let spec = InferenceModelSpec {
+                    name: id.into(),
+                    label_override: saved_label,
+                    supports_1m: false,
+                };
+                let item = inference_model_json(&spec);
+                assert_eq!(item["name"], id);
+                assert_eq!(item["labelOverride"], label);
+            }
+        }
+        let custom = InferenceModelSpec {
+            name: "claude-opus-5-5".into(),
+            label_override: Some("我的专用模型".into()),
+            supports_1m: true,
+        };
+        assert_eq!(
+            inference_model_json(&custom)["labelOverride"],
+            "我的专用模型"
+        );
+        let mut provider = proxy_provider("labels");
+        let routes = &mut provider.meta.as_mut().unwrap().claude_desktop_model_routes;
+        let route = routes.get_mut("claude-sonnet-4-6").unwrap();
+        route.label_override = Some("claude-opus-5-5".into());
+        let response = model_list_response(&provider).unwrap();
+        assert_eq!(response["data"][0]["id"], "claude-sonnet-4-6");
+        assert_eq!(response["data"][0]["display_name"], "Claude Opus 5.5");
     }
 
     #[test]

@@ -10,6 +10,7 @@ use tauri_plugin_opener::OpenerExt;
 use crate::app_config::AppType;
 use crate::error::AppError;
 use crate::services::usage_cache::UsageCache;
+use crate::services::ProviderService;
 use crate::store::AppState;
 
 const TEMPLATE_TYPE_OFFICIAL_SUBSCRIPTION: &str = "official_subscription";
@@ -61,8 +62,6 @@ pub struct TrayTexts {
     pub lightweight_mode: &'static str,
     pub quit: &'static str,
     pub _auto_label: &'static str,
-    pub projects_label: &'static str,
-    pub no_project_label: &'static str,
 }
 
 /// 将系统区域标识映射为托盘支持的语言码。
@@ -106,42 +105,34 @@ impl TrayTexts {
             "en" => Self {
                 show_main: "Open main window",
                 open_website: "Open Official Website",
-                no_providers_label: "(no providers)",
+                no_providers_label: "(activate Xinghuo first)",
                 lightweight_mode: "Lightweight Mode",
                 quit: "Quit",
                 _auto_label: "Auto (Failover)",
-                projects_label: "Projects",
-                no_project_label: "No project",
             },
             "ja" => Self {
                 show_main: "メインウィンドウを開く",
                 open_website: "公式サイトを開く",
-                no_providers_label: "(プロバイダーなし)",
+                no_providers_label: "(星火を有効化してください)",
                 lightweight_mode: "軽量モード",
                 quit: "終了",
                 _auto_label: "自動 (フェイルオーバー)",
-                projects_label: "プロジェクト",
-                no_project_label: "プロジェクトを使用しない",
             },
             "zh-TW" => Self {
                 show_main: "開啟主介面",
                 open_website: "開啟官方網站",
-                no_providers_label: "(無供應商)",
+                no_providers_label: "(請先啟用星火)",
                 lightweight_mode: "輕量模式",
                 quit: "退出",
                 _auto_label: "自動 (故障轉移)",
-                projects_label: "專案",
-                no_project_label: "不使用專案",
             },
             _ => Self {
                 show_main: "打开主界面",
                 open_website: "打开官方网站",
-                no_providers_label: "(无供应商)",
+                no_providers_label: "(请先激活星火)",
                 lightweight_mode: "轻量模式",
                 quit: "退出",
                 _auto_label: "自动 (故障转移)",
-                projects_label: "项目",
-                no_project_label: "不使用项目",
             },
         }
     }
@@ -562,7 +553,7 @@ fn handle_auto_click(app: &tauri::AppHandle, app_type: &AppType) -> Result<(), A
 
         // 强一致语义：Auto 模式开启后立即切到队列 P1（P1→P2→...）
         // 若队列为空，则尝试把“当前供应商”自动加入队列作为 P1，避免用户陷入无法开启的死锁。
-        let all_providers = app_state.db.get_all_providers(app_type_str)?;
+        let all_providers = ProviderService::list(&app_state, app_type.clone())?;
         let mut queue = app_state
             .db
             .get_failover_queue(app_type_str)?
@@ -774,7 +765,18 @@ pub fn create_tray_menu(
         }
 
         let app_type_str = section.app_type.as_str();
-        let providers = app_state.db.get_all_providers(app_type_str)?;
+        let mut providers = ProviderService::list(&app_state, section.app_type.clone())?;
+        // 托盘也只保留星火入口，旧配置保留在本机供恢复使用。
+        providers.retain(|id, _| {
+            crate::xinghuo::ManagedApp::ALL
+                .iter()
+                .any(|app| app.app_type() == section.app_type && app.provider_id() == id)
+        });
+
+        // 扩展平台还没接入星火供应商时不占菜单位置；接入后自然出现。
+        if providers.is_empty() && !matches!(section.app_type, AppType::Claude | AppType::Codex) {
+            continue;
+        }
 
         let current_id =
             crate::settings::get_effective_current_provider(&app_state.db, &section.app_type)?
@@ -854,90 +856,6 @@ pub fn create_tray_menu(
         menu_builder = menu_builder.separator();
     }
 
-    // 项目 Profile 子菜单：项目列表全应用共享，按分组嵌套子菜单各自勾选/应用
-    // （组内应用可见且存在项目时才显示该组）
-    {
-        use crate::services::profile::ProfileScope;
-
-        let any_scope_visible = ProfileScope::ALL.iter().any(|scope| {
-            scope
-                .apps()
-                .iter()
-                .any(|app_type| visible_apps.is_visible(app_type))
-        });
-        let profiles = if any_scope_visible {
-            app_state.db.get_all_profiles()?
-        } else {
-            Vec::new()
-        };
-
-        let mut scope_submenus = Vec::new();
-        for scope in ProfileScope::ALL {
-            if profiles.is_empty()
-                || !scope
-                    .apps()
-                    .iter()
-                    .any(|app_type| visible_apps.is_visible(app_type))
-            {
-                continue;
-            }
-            let current_profile_id = app_state
-                .db
-                .get_current_profile_id(scope.as_str())?
-                .unwrap_or_default();
-            // 分组标签用产品名，不进 i18n
-            let scope_label = match scope {
-                ProfileScope::Claude => "Claude Code",
-                ProfileScope::ClaudeDesktop => "Claude Desktop",
-                ProfileScope::Codex => "Codex",
-            };
-            let mut scope_builder = SubmenuBuilder::with_id(
-                app,
-                format!("submenu_profiles_{}", scope.as_str()),
-                scope_label,
-            );
-            for profile in &profiles {
-                let item = CheckMenuItem::with_id(
-                    app,
-                    format!("profile_{}_{}", scope.as_str(), profile.id),
-                    &profile.name,
-                    true,
-                    current_profile_id == profile.id,
-                    None::<&str>,
-                )
-                .map_err(|e| AppError::Message(format!("创建项目菜单项失败: {e}")))?;
-                scope_builder = scope_builder.item(&item);
-            }
-            let none_item = CheckMenuItem::with_id(
-                app,
-                format!("profile_none_{}", scope.as_str()),
-                tray_texts.no_project_label,
-                true,
-                current_profile_id.is_empty(),
-                None::<&str>,
-            )
-            .map_err(|e| AppError::Message(format!("创建不使用项目菜单项失败: {e}")))?;
-            let scope_submenu = scope_builder
-                .separator()
-                .item(&none_item)
-                .build()
-                .map_err(|e| AppError::Message(format!("构建项目分组子菜单失败: {e}")))?;
-            scope_submenus.push(scope_submenu);
-        }
-
-        if !scope_submenus.is_empty() {
-            let mut profiles_builder =
-                SubmenuBuilder::with_id(app, "submenu_profiles", tray_texts.projects_label);
-            for scope_submenu in &scope_submenus {
-                profiles_builder = profiles_builder.item(scope_submenu);
-            }
-            let profiles_submenu = profiles_builder
-                .build()
-                .map_err(|e| AppError::Message(format!("构建项目子菜单失败: {e}")))?;
-            menu_builder = menu_builder.item(&profiles_submenu).separator();
-        }
-    }
-
     let lightweight_item = CheckMenuItem::with_id(
         app,
         "lightweight_mode",
@@ -983,7 +901,7 @@ fn update_tray_usage_labels(app: &tauri::AppHandle) {
         let Some(submenu) = handles.get(&section.app_type) else {
             continue;
         };
-        let Ok(providers) = app_state.db.get_all_providers(section.app_type.as_str()) else {
+        let Ok(providers) = ProviderService::list(&app_state, section.app_type.clone()) else {
             continue;
         };
         let Ok(Some(current_id)) =
@@ -1070,7 +988,10 @@ pub fn handle_tray_menu_event(app: &tauri::AppHandle, event_id: &str) {
             }
         }
         "open_website" => {
-            if let Err(e) = app.opener().open_url("https://ccswitch.io", None::<String>) {
+            if let Err(e) = app
+                .opener()
+                .open_url("https://ai.wfpromax.xyz", None::<String>)
+            {
                 log::error!("打开官方网站失败: {e}");
             }
         }

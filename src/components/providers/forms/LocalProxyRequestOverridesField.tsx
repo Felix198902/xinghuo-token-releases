@@ -34,7 +34,7 @@ export function LocalProxyRequestOverridesField({
         <p className="text-xs text-muted-foreground">
           {t("providerForm.localProxyRequestOverridesHint", {
             defaultValue:
-              "仅在本地路由/代理接管后生效，应用于协议转换后的上游请求。",
+              "仅在本地路由/代理接管后生效，应用于协议转换后发往服务端的请求。",
           })}
         </p>
       </div>
@@ -49,7 +49,7 @@ export function LocalProxyRequestOverridesField({
           <Textarea
             value={headersJson}
             onChange={(event) => onHeadersJsonChange(event.target.value)}
-            placeholder={'{\n  "X-Provider": "cc-switch"\n}'}
+            placeholder={'{\n  "X-Provider": "my-app"\n}'}
             className="min-h-[132px] resize-y font-mono text-xs"
             aria-invalid={Boolean(headerError)}
           />

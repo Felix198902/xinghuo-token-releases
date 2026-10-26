@@ -16,17 +16,26 @@ export interface AppConfig {
   badgeClass: string;
 }
 
+/**
+ * 主界面展示的四个主平台（会话/提示词等入口也只认这四个）。
+ * 激活面板的「更多平台」折叠区见 `MORE_PLATFORM_IDS`；与 Rust 侧
+ * `VisibleApps::is_visible` 一致，其他入口保持原样。
+ */
 export const APP_IDS: AppId[] = [
   "claude",
   "claude-desktop",
   "codex",
+  "opencode",
+];
+
+/** 激活面板「更多平台」折叠区里的扩展平台（与 Rust 端 ManagedApp::EXTRA 一致）。 */
+export const MORE_PLATFORM_IDS: AppId[] = [
   "gemini",
   "grokbuild",
-  "opencode",
   "openclaw",
   "hermes",
-  "pi",
   "mcode",
+  "pi",
 ];
 
 export const DEFAULT_VISIBLE_APPS: VisibleApps = {
@@ -43,16 +52,7 @@ export const DEFAULT_VISIBLE_APPS: VisibleApps = {
 };
 
 /** App IDs shown in Skills panels. */
-export const SKILLS_APP_IDS: AppId[] = [
-  "claude",
-  "codex",
-  "gemini",
-  "grokbuild",
-  "opencode",
-  "hermes",
-  "pi",
-  "mcode",
-];
+export const SKILLS_APP_IDS: AppId[] = ["claude", "codex", "opencode"];
 
 export type ProxyAppId = Extract<
   AppId,
@@ -90,15 +90,7 @@ export function isAdditiveAppId(appId: string): appId is AdditiveAppId {
 
 /** Pi has no native MCP registry; do not manufacture a disabled mirror. */
 export type McpAppId = Exclude<AppId, "claude-desktop" | "openclaw" | "pi">;
-export const MCP_APP_IDS: McpAppId[] = [
-  "claude",
-  "codex",
-  "gemini",
-  "grokbuild",
-  "opencode",
-  "hermes",
-  "mcode",
-];
+export const MCP_APP_IDS: McpAppId[] = ["claude", "codex", "opencode"];
 
 export function isMcpAppId(appId: string): appId is McpAppId {
   return (MCP_APP_IDS as string[]).includes(appId);

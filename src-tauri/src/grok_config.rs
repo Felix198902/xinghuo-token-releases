@@ -86,6 +86,7 @@ pub fn validate_config_toml_syntax(config_toml: &str) -> Result<(), AppError> {
 /// 允许 `[mcp_servers]` 等其它内容）。只要出现过任一自定义键就返回 false，
 /// 让残缺的自定义配置继续走 `validate_config_toml` 报出真实错误，
 /// 而不是被误判成官方态静默吞掉。语法不合法同样返回 false。
+#[cfg(test)]
 pub fn is_official_live_config(config_toml: &str) -> bool {
     let Ok(document) = config_toml.parse::<toml::Value>() else {
         return false;

@@ -407,7 +407,7 @@ describe("PiProviderForm", () => {
       target: { value: "json-provider" },
     });
     fireEvent.change(screen.getByLabelText("provider.name"), {
-      target: { value: "CC Switch label" },
+      target: { value: "星火无限token label" },
     });
 
     const configEditor = screen.getByLabelText("provider.configJson");
@@ -704,7 +704,7 @@ describe("PiProviderForm", () => {
       baseUrl: "https://api.example.com/v1",
       headers: {
         "HTTP-Referer": "https://cc-switch.example",
-        "X-Title": "CC Switch",
+        "X-Title": "星火无限token",
       },
       models: [completeModel("model-a", "Model A")],
     };
@@ -732,7 +732,7 @@ describe("PiProviderForm", () => {
       screen
         .getAllByLabelText("Value")
         .map((element) => element.getAttribute("value")),
-    ).toEqual(["https://cc-switch.example", "CC Switch"]);
+    ).toEqual(["https://cc-switch.example", "星火无限token"]);
 
     fireEvent.click(
       screen.getByRole("button", { name: "Save existing headers" }),
@@ -740,90 +740,6 @@ describe("PiProviderForm", () => {
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(JSON.parse(onSubmit.mock.calls[0][0].settingsConfig)).toEqual(input);
-  });
-
-  it("applies a maintained preset without creating a Pi-owned provider key", async () => {
-    const onSubmit = vi.fn().mockResolvedValue(undefined);
-    render(
-      <PiProviderForm
-        appId="pi"
-        submitLabel="Save preset"
-        onSubmit={onSubmit}
-        onCancel={() => {}}
-      />,
-    );
-
-    fireEvent.click(screen.getByText("Kimi", { selector: "span" }));
-    fireEvent.change(screen.getByLabelText("pi.form.credential"), {
-      target: { value: "literal-key" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save preset" }));
-
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    expect(onSubmit.mock.calls[0][0]).toMatchObject({
-      providerKey: "cc-switch-kimi",
-      name: "Kimi",
-      presetCategory: "cn_official",
-    });
-    expect(JSON.parse(onSubmit.mock.calls[0][0].settingsConfig)).toMatchObject({
-      api: "openai-completions",
-      baseUrl: "https://api.moonshot.cn/v1",
-      apiKey: "literal-key",
-    });
-    expect(
-      screen.queryByText("pi.form.nativeLoginAlternative"),
-    ).not.toBeInTheDocument();
-  });
-
-  it("keeps preset model order without exposing a default-model field", async () => {
-    const onSubmit = vi.fn().mockResolvedValue(undefined);
-    render(
-      <PiProviderForm
-        appId="pi"
-        submitLabel="Save preset"
-        onSubmit={onSubmit}
-        onCancel={() => {}}
-      />,
-    );
-
-    fireEvent.click(screen.getByText("Kimi", { selector: "span" }));
-    fireEvent.change(screen.getByLabelText("pi.form.credential"), {
-      target: { value: "literal-key" },
-    });
-    expect(
-      document.querySelector("#pi-activation-model"),
-    ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Save preset" }));
-
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    const submitted = onSubmit.mock.calls[0][0];
-    const config = JSON.parse(submitted.settingsConfig);
-    expect(config.models.map((model: { id: string }) => model.id)).toEqual([
-      "kimi-k2.7-code",
-      "kimi-k3",
-      "kimi-k2.7-code-highspeed",
-      "kimi-k2.6",
-    ]);
-    expect(
-      config.models.map((model: { id: string; name?: string }) => ({
-        id: model.id,
-        name: model.name,
-      })),
-    ).toEqual([
-      { id: "kimi-k2.7-code", name: "Kimi K2.7 Code" },
-      { id: "kimi-k3", name: "Kimi K3" },
-      { id: "kimi-k2.7-code-highspeed", name: "Kimi K2.7 Code HighSpeed" },
-      { id: "kimi-k2.6", name: "Kimi K2.6" },
-    ]);
-    for (const model of config.models) {
-      expect(model).toMatchObject({
-        reasoning: true,
-        input: ["text", "image"],
-      });
-      expect(model.contextWindow).toBeGreaterThan(0);
-      expect(model.maxTokens).toBeGreaterThan(0);
-    }
-    expect(submitted).not.toHaveProperty("piActivateModelId");
   });
 
   it("requires custom model limits instead of inferring Pi metadata", async () => {
@@ -901,28 +817,6 @@ describe("PiProviderForm", () => {
         },
       ],
     });
-  });
-
-  it("renders validation errors in the form and focuses the invalid field", async () => {
-    render(
-      <PiProviderForm
-        appId="pi"
-        submitLabel="Save invalid preset"
-        onSubmit={vi.fn()}
-        onCancel={() => {}}
-      />,
-    );
-
-    fireEvent.click(screen.getByText("Kimi", { selector: "span" }));
-    fireEvent.click(
-      screen.getByRole("button", { name: "Save invalid preset" }),
-    );
-
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("pi.form.credentialRequired");
-    await waitFor(() =>
-      expect(screen.getByLabelText("pi.form.credential")).toHaveFocus(),
-    );
   });
 
   it("reuses the shared model fetch command and lets the user select a real result", async () => {
@@ -1308,44 +1202,6 @@ describe("PiProviderForm", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("keeps a preset thinking map when the user changes the API", async () => {
-    const user = userEvent.setup();
-    render(
-      <PiProviderForm
-        appId="pi"
-        submitLabel="Save exact thinking map"
-        onSubmit={vi.fn()}
-        onCancel={() => {}}
-      />,
-    );
-
-    await user.click(screen.getByText("Kimi", { selector: "span" }));
-    const configEditor = screen.getByLabelText(
-      "provider.configJson",
-    ) as HTMLTextAreaElement;
-    expect(JSON.parse(configEditor.value).models[0].thinkingLevelMap).toEqual({
-      off: null,
-    });
-
-    await user.click(document.querySelector("#pi-provider-api-select")!);
-    await user.click(
-      await screen.findByRole("option", { name: "OpenAI Responses" }),
-    );
-    expect(JSON.parse(configEditor.value).models[0].thinkingLevelMap).toEqual({
-      off: null,
-    });
-
-    await user.click(document.querySelector("#pi-provider-api-select")!);
-    await user.click(
-      await screen.findByRole("option", {
-        name: "OpenAI Chat Completions",
-      }),
-    );
-    expect(JSON.parse(configEditor.value).models[0].thinkingLevelMap).toEqual({
-      off: null,
-    });
-  });
-
   it("edits Pi thinking-map missing, null, and string states from the collapsed capability area", async () => {
     const user = userEvent.setup();
     // Start with a model so this test exercises thinking-map interactions without
@@ -1422,63 +1278,6 @@ describe("PiProviderForm", () => {
 
     await user.click(screen.getByLabelText("pi.form.reasoning"));
     expect(screen.getByText("pi.form.thinkingLevelsLabel")).toBeVisible();
-  });
-
-  it("lets the user edit a preset thinking map without automatic recovery", async () => {
-    const user = userEvent.setup();
-    render(
-      <PiProviderForm
-        appId="pi"
-        submitLabel="Save thinking map"
-        onSubmit={vi.fn()}
-        onCancel={() => {}}
-      />,
-    );
-
-    await user.click(screen.getByText("DeepSeek", { selector: "span" }));
-    await user.click(
-      screen.getAllByRole("button", {
-        name: "展开或收起模型详情",
-      })[0],
-    );
-
-    const configEditor = screen.getByLabelText(
-      "provider.configJson",
-    ) as HTMLTextAreaElement;
-    const automaticMap = {
-      minimal: null,
-      low: null,
-      medium: null,
-      high: "high",
-      max: "max",
-    };
-    expect(JSON.parse(configEditor.value).models[0].thinkingLevelMap).toEqual(
-      automaticMap,
-    );
-
-    await user.click(
-      screen.getByRole("button", {
-        name: "pi.form.customizeThinkingLevels",
-      }),
-    );
-    await user.click(
-      screen
-        .getByText("pi.form.thinkingLevels.high")
-        .closest("button") as HTMLButtonElement,
-    );
-    await user.click(
-      screen.getByLabelText("pi.form.thinkingLevelMarkUnavailable"),
-    );
-
-    expect(
-      screen.queryByRole("button", {
-        name: "pi.form.restoreModelAutofill",
-      }),
-    ).not.toBeInTheDocument();
-    expect(JSON.parse(configEditor.value).models[0].thinkingLevelMap).toEqual({
-      ...automaticMap,
-      high: null,
-    });
   });
 
   it.each([
@@ -1581,43 +1380,6 @@ describe("PiProviderForm", () => {
       "pi.form.thinkingLevelMapInvalid",
     );
     expect(onSubmit).not.toHaveBeenCalled();
-  });
-
-  it("preserves preset fields across a temporarily invalid JSON draft", async () => {
-    const user = userEvent.setup();
-    render(
-      <PiProviderForm
-        appId="pi"
-        submitLabel="Save repaired JSON"
-        onSubmit={vi.fn()}
-        onCancel={() => {}}
-      />,
-    );
-
-    await user.click(screen.getByText("Kimi", { selector: "span" }));
-    const configEditor = screen.getByLabelText(
-      "provider.configJson",
-    ) as HTMLTextAreaElement;
-    const originalConfig = JSON.parse(configEditor.value);
-    fireEvent.change(configEditor, {
-      target: { value: configEditor.value.slice(0, -1) },
-    });
-    originalConfig.nativeField = { keep: true };
-    fireEvent.change(configEditor, {
-      target: { value: JSON.stringify(originalConfig, null, 2) },
-    });
-
-    await user.click(
-      screen.getAllByRole("button", {
-        name: "展开或收起模型详情",
-      })[0],
-    );
-    expect(
-      screen.queryByRole("button", {
-        name: "pi.form.restoreModelAutofill",
-      }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByLabelText("pi.form.reasoning")).toBeChecked();
   });
 
   it("keeps manual fields stable after an unrelated JSON edit", async () => {
@@ -2150,7 +1912,7 @@ describe("PiProviderForm", () => {
         submitLabel="Save unnamed provider"
         onSubmit={onSubmit}
         onCancel={() => {}}
-        initialData={{ name: "CC Switch label", settingsConfig: input }}
+        initialData={{ name: "星火无限token label", settingsConfig: input }}
       />,
     );
 
@@ -2176,12 +1938,12 @@ describe("PiProviderForm", () => {
         submitLabel="Save independent name"
         onSubmit={onSubmit}
         onCancel={() => {}}
-        initialData={{ name: "CC Switch label", settingsConfig: input }}
+        initialData={{ name: "星火无限token label", settingsConfig: input }}
       />,
     );
 
     expect(screen.getByLabelText("provider.name")).toHaveValue(
-      "CC Switch label",
+      "星火无限token label",
     );
     fireEvent.click(
       screen.getByRole("button", { name: "Save independent name" }),

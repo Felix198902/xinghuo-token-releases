@@ -791,6 +791,13 @@ export const iconMetadata: Record<string, IconMetadata> = {
     keywords: ["jiekou", "jiekou ai", "interface ai", "aggregator"],
     defaultColor: "#000000",
   },
+  xinghuo: {
+    name: "xinghuo",
+    displayName: "星火无限token",
+    category: "ai-provider",
+    keywords: ["xinghuo", "星火", "token", "wfpromax"],
+    defaultColor: "currentColor",
+  },
   xycai: {
     name: "xycai",
     displayName: "XycAi",

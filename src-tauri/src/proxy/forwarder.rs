@@ -1634,6 +1634,15 @@ impl RequestForwarder {
             mapped_body
         };
 
+        if matches!(app_type, AppType::ClaudeDesktop)
+            && resolved_claude_api_format
+                .as_deref()
+                .unwrap_or_else(|| super::providers::get_claude_api_format(provider))
+                == "openai_chat"
+        {
+            crate::claude_desktop_config::normalize_proxy_chat_text(&mut request_body);
+        }
+
         // Native Responses passthrough to a strict third-party gateway (xAI).
         // One gate so rebase conflicts stay here plus the isolate file, not
         // scattered across sanitizers. Flatten namespaces first; then apply

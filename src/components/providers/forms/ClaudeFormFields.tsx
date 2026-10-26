@@ -812,7 +812,7 @@ export function ClaudeFormFields({
             {category !== "cloud_provider" && !isXaiOauthPreset && (
               <div className="space-y-2">
                 <FormLabel htmlFor="apiFormat">
-                  {t("providerForm.apiFormat", { defaultValue: "上游格式" })}
+                  {t("providerForm.apiFormat", { defaultValue: "接口格式" })}
                 </FormLabel>
                 <Select value={apiFormat} onValueChange={onApiFormatChange}>
                   <SelectTrigger id="apiFormat" className="w-full">
@@ -1090,7 +1090,7 @@ export function ClaudeFormFields({
               <p className="text-xs text-muted-foreground">
                 {t("providerForm.fallbackModelHint", {
                   defaultValue:
-                    "用于未明确落到 Sonnet、Opus、Fable、Haiku 角色的请求。使用第三方/中转端点时建议填写：否则这些请求（含 Haiku 后台子任务）会以原始 Claude 模型名透传给上游，可能因上游无此模型而报错。官方端点可留空。",
+                    "用于未明确落到 Sonnet、Opus、Fable、Haiku 角色的请求。使用第三方端点时建议填写：否则这些请求（含 Haiku 后台子任务）会以原始 Claude 模型名直接发给服务端，可能因服务端没有该模型而报错。官方端点可留空。",
                 })}
               </p>
             </div>

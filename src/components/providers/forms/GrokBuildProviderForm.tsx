@@ -33,7 +33,6 @@ import { BasicFormFields } from "./BasicFormFields";
 import { CodexFormFields } from "./CodexFormFields";
 import { ProviderPresetSelector } from "./ProviderPresetSelector";
 import {
-  grokBuildOfficialPreset,
   grokBuildProviderPresets,
   type GrokBuildProviderPreset,
 } from "@/config/grokBuildProviderPresets";
@@ -51,7 +50,6 @@ import {
   validateGrokBuildConfig,
 } from "@/utils/grokBuildConfig";
 import { resolveProviderIcon } from "@/utils/providerIcon";
-import { GROKBUILD_OFFICIAL_PROVIDER_ID } from "@/utils/providerCapabilities";
 
 type GrokBuildProviderFormProps = Omit<ProviderFormProps, "appId">;
 
@@ -61,7 +59,6 @@ const grokPresetEntries: Array<{
   id: string;
   preset: GrokBuildProviderPreset;
 }> = [
-  { id: GROKBUILD_OFFICIAL_PROVIDER_ID, preset: grokBuildOfficialPreset },
   ...grokBuildProviderPresets.map((preset, index) => ({
     id: `grokbuild-${index}`,
     preset,
@@ -230,20 +227,6 @@ export function GrokBuildProviderForm({
       setIsPartner(false);
       setPartnerPromotionKey(undefined);
       setPresetEndpoints([]);
-      return;
-    }
-
-    if (presetId === GROKBUILD_OFFICIAL_PROVIDER_ID) {
-      // 官方登录：无 API Key / 地址 / 模型表可填，提交走 ensure seed 流程
-      form.setValue("name", grokBuildOfficialPreset.name);
-      form.setValue("websiteUrl", grokBuildOfficialPreset.websiteUrl);
-      form.setValue("icon", grokBuildOfficialPreset.icon ?? "");
-      form.setValue("iconColor", grokBuildOfficialPreset.iconColor ?? "");
-      setCategory("official");
-      setIsPartner(false);
-      setPartnerPromotionKey(undefined);
-      setPresetEndpoints([]);
-      setRawConfig("");
       return;
     }
 

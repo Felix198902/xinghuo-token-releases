@@ -50,20 +50,6 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<bool, String> {
     .map_err(|e| format!("剪贴板任务执行失败: {e}"))?
 }
 
-/// 检查更新
-#[tauri::command]
-pub async fn check_for_updates(handle: AppHandle) -> Result<bool, String> {
-    handle
-        .opener()
-        .open_url(
-            "https://github.com/farion1231/cc-switch/releases/latest",
-            None::<String>,
-        )
-        .map_err(|e| format!("打开更新页面失败: {e}"))?;
-
-    Ok(true)
-}
-
 /// 判断是否为便携版（绿色版）运行
 #[tauri::command]
 pub async fn is_portable_mode() -> Result<bool, String> {
@@ -1170,7 +1156,7 @@ async fn fetch_github_latest_version(client: &reqwest::Client, repo: &str) -> Op
     let url = format!("https://api.github.com/repos/{repo}/releases/latest");
     let resp = client
         .get(&url)
-        .header("User-Agent", "cc-switch")
+        .header("User-Agent", "xinghuo-token")
         .header("Accept", "application/vnd.github+json")
         .timeout(LATEST_PROBE_TIMEOUT)
         .send()
@@ -5061,11 +5047,11 @@ pub(crate) fn launch_terminal_running(command_line: &str, label: &str) -> Result
         let content = format!(
             r#"#!/usr/bin/env sh
 trap 'rm -f "{script_path}"' EXIT
-echo "[cc-switch] Starting: {label}"
+echo "[星火无限token] Starting: {label}"
 echo ""
 {cmd}
 echo ""
-echo "[cc-switch] Command exited. Press Enter to close."
+echo "[星火无限token] Command exited. Press Enter to close."
 read -r _
 "#,
             script_path = file.display(),
@@ -5186,7 +5172,7 @@ read -r _
 
         let bat_file = temp_dir.join(format!("cc_switch_{}_{}.bat", label, pid));
         let content = format!(
-            "@echo off\r\necho [cc-switch] Starting: {label}\r\necho.\r\n{cmd}\r\necho.\r\necho [cc-switch] Command exited. Press any key to close.\r\npause >nul\r\ndel \"%~f0\" >nul 2>&1\r\n",
+            "@echo off\r\necho [星火无限token] Starting: {label}\r\necho.\r\n{cmd}\r\necho.\r\necho [星火无限token] Command exited. Press any key to close.\r\npause >nul\r\ndel \"%~f0\" >nul 2>&1\r\n",
             label = label,
             cmd = command_line,
         );

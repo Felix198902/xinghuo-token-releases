@@ -3,7 +3,6 @@ import { act, renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAddProviderMutation } from "@/lib/query/mutations";
-import type { Provider } from "@/types";
 
 const apiMocks = vi.hoisted(() => ({
   add: vi.fn(),
@@ -99,45 +98,6 @@ describe("useAddProviderMutation", () => {
     );
     expect(duplicatedProvider.id).toBe("generated-uuid");
     expect(duplicatedProvider.id).not.toBe("claude-desktop-official");
-  });
-
-  it("returns the persisted seed row for the Claude Desktop official preset", async () => {
-    const seedProvider: Provider = {
-      id: "claude-desktop-official",
-      name: "Claude Desktop Official",
-      settingsConfig: { env: {} },
-      websiteUrl: "https://claude.ai/download",
-      category: "official",
-      icon: "anthropic",
-      iconColor: "#D4915D",
-      createdAt: 123,
-    };
-    apiMocks.getAll.mockResolvedValueOnce({
-      "claude-desktop-official": seedProvider,
-    });
-    const { wrapper } = createWrapper();
-    const { result } = renderHook(
-      () => useAddProviderMutation("claude-desktop"),
-      { wrapper },
-    );
-
-    const persistedProvider = await act(async () =>
-      result.current.mutateAsync({
-        name: "Renamed by form",
-        settingsConfig: { env: { ignored: true } },
-        websiteUrl: "https://example.invalid",
-        category: "official",
-        icon: "custom-icon",
-        ensureClaudeDesktopOfficialSeed: true,
-      }),
-    );
-
-    expect(apiMocks.ensureClaudeDesktopOfficialProvider).toHaveBeenCalledTimes(
-      1,
-    );
-    expect(apiMocks.getAll).toHaveBeenCalledWith("claude-desktop");
-    expect(apiMocks.add).not.toHaveBeenCalled();
-    expect(persistedProvider).toEqual(seedProvider);
   });
 
   it("adds a managed Codex account as a separate official card", async () => {

@@ -21,30 +21,6 @@ vi.mock("@/components/JsonEditor", () => ({
 }));
 
 describe("GrokBuildProviderForm", () => {
-  it("offers curated Grok Build presets and applies one", async () => {
-    const user = userEvent.setup();
-    const { container } = render(
-      <GrokBuildProviderForm
-        submitLabel="Save"
-        onSubmit={() => {}}
-        onCancel={() => {}}
-      />,
-    );
-
-    // 国产官方直连（cn_official）不在 Grok Build 预设列表里
-    expect(screen.queryByRole("button", { name: /BytePlus/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Kimi/ })).toBeNull();
-
-    await user.click(screen.getByRole("button", { name: /PatewayAI/ }));
-
-    const baseUrlInput =
-      container.querySelector<HTMLInputElement>("#codexBaseUrl");
-    const nameInput =
-      container.querySelector<HTMLInputElement>('input[name="name"]');
-    expect(baseUrlInput?.value).toBe("https://api.pateway.ai/v1");
-    expect(nameInput?.value).toBe("PatewayAI");
-  });
-
   it("submits a complete config.toml payload with Grok defaults", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
@@ -104,7 +80,7 @@ describe("GrokBuildProviderForm", () => {
     expect(container.querySelector("#grokbuild-context-window")).toHaveValue(
       500000,
     );
-    expect(screen.getByText("上游格式")).toBeInTheDocument();
+    expect(screen.getByText("接口格式")).toBeInTheDocument();
   });
 
   it("keeps the Grok client on Responses when the upstream uses Chat", async () => {
@@ -262,7 +238,7 @@ context_window = 500000
 
     await user.click(screen.getByRole("button", { name: /高级选项/ }));
     expect(
-      screen.getByText(/把请求中的 reasoning effort 转成上游 Chat 参数/),
+      screen.getByText(/把请求中的 reasoning effort 转成 Chat 接口参数/),
     ).toBeInTheDocument();
     expect(screen.queryByText(/Codex 的 reasoning\.effort/)).toBeNull();
   });

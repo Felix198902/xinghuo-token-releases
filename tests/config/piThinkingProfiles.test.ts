@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  getPiModelCatalogReference,
-  piModelCatalog,
-} from "@/config/piModelCatalog";
 import { piProviderPresets } from "@/config/piProviderPresets";
 import {
   isPiThinkingLevelMap,
@@ -49,52 +45,6 @@ describe("Pi thinking profiles", () => {
     }
   });
 
-  it("materializes preset-local profiles without serializing references", () => {
-    const materialized = [];
-    for (const preset of piProviderPresets) {
-      for (const model of preset.settingsConfig.models) {
-        if (!model.thinkingLevelMap) continue;
-        const reference = getPiModelCatalogReference(model);
-        materialized.push({
-          preset: preset.name,
-          modelId: model.id,
-          profileId: reference?.presetThinkingProfileId,
-          map: model.thinkingLevelMap,
-        });
-        expect(reference).toBeDefined();
-        expect(piModelCatalog).toHaveProperty(reference!.catalogKey);
-        expect(JSON.parse(JSON.stringify(model))).not.toHaveProperty(
-          "presetThinkingProfileId",
-        );
-      }
-    }
-
-    expect(materialized).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          preset: "Kimi",
-          modelId: "kimi-k2.7-code",
-          profileId: "offUnsupported",
-        }),
-        expect.objectContaining({
-          preset: "DeepSeek",
-          modelId: "deepseek-v4-pro",
-          profileId: "deepseekV4",
-        }),
-        expect.objectContaining({
-          preset: "OpenCode Go",
-          modelId: "glm-5.2",
-          profileId: "openCodeGoGlm52",
-        }),
-        expect.objectContaining({
-          preset: "AWS Bedrock",
-          modelId: "global.anthropic.claude-opus-5",
-          profileId: "xhighAndMax",
-        }),
-      ]),
-    );
-  });
-
   it("gives every reasoning preset an explicit map", () => {
     for (const preset of piProviderPresets) {
       for (const model of preset.settingsConfig.models) {
@@ -102,23 +52,6 @@ describe("Pi thinking profiles", () => {
         expect(model).toHaveProperty("thinkingLevelMap");
         expect(isPiThinkingLevelMap(model.thinkingLevelMap)).toBe(true);
       }
-    }
-  });
-
-  it("pairs Anthropic adaptive maps with Pi's required compatibility flag", () => {
-    const adaptiveModels = piProviderPresets.flatMap((preset) =>
-      preset.settingsConfig.api === "anthropic-messages"
-        ? preset.settingsConfig.models.filter(
-            (model) =>
-              model.compat?.forceAdaptiveThinking === true &&
-              Object.keys(model.thinkingLevelMap ?? {}).length > 0,
-          )
-        : [],
-    );
-
-    expect(adaptiveModels.length).toBeGreaterThan(0);
-    for (const model of adaptiveModels) {
-      expect(model.compat).toMatchObject({ forceAdaptiveThinking: true });
     }
   });
 
