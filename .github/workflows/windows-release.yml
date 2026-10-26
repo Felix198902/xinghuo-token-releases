@@ -1,0 +1,118 @@
+name: Windows Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag (for example v3.20.5)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: windows-2022
+            target: x86_64-pc-windows-msvc
+          - arch: arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: custom
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Setup LLVM for Windows ARM64
+        if: matrix.arch == 'arm64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $llvmBin = 'C:\Program Files\LLVM\bin'
+          if (-not (Test-Path $llvmBin)) {
+            throw "LLVM not found at $llvmBin"
+          }
+          "LIBCLANG_PATH=$llvmBin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CLANG_PATH=$(Join-Path $llvmBin 'clang.exe')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Setup pnpm
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+        run: |
+          corepack enable
+          corepack install
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: pnpm tauri build --target ${{ matrix.target }} --bundles nsis --ci
+
+      - name: Prepare installer
+        shell: pwsh
+        env:
+          ARCH: ${{ matrix.arch }}
+          TAG: ${{ inputs.tag }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:TAG.TrimStart('v')
+          $bundle = "src-tauri/target/$($env:TARGET)/release/bundle"
+          $installer = Get-ChildItem -Path $bundle -Recurse -Filter '*setup.exe' | Select-Object -First 1
+          if ($null -eq $installer) {
+            throw "NSIS installer not found under $bundle"
+          }
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+          $name = "xinghuo-token_${version}_windows-$($env:ARCH)-setup.exe"
+          Copy-Item $installer.FullName "release-assets/$name"
+          Get-FileHash "release-assets/$name" -Algorithm SHA256
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: windows-${{ matrix.arch }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish:
+    runs-on: ubuntu-22.04
+    needs: build
+    steps:
+      - name: Download Windows installers
+        uses: actions/download-artifact@v6
+        with:
+          pattern: windows-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Append installers to the existing release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
