@@ -569,8 +569,7 @@ pub async fn fetch_plan(token: &str) -> ApplyPlan {
         if desktop_enabled {
             plan.claude_desktop_models = resolve_desktop_models(desktop_config, &models);
             log::info!(
-                "[xinghuo] Claude Desktop 模型发现: 返回 {} 个，匹配 {} 个",
-                models.len(),
+                "[xinghuo] Claude Desktop 模型发现: 接入 {} 个",
                 plan.claude_desktop_models.len()
             );
             // 单模型配置也必须属于当前密钥可用模型，不能绕过发现失败。

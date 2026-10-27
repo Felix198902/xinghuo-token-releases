@@ -40,8 +40,13 @@ describe("DesktopConnectionDialog", () => {
     vi.clearAllMocks();
   });
 
-  it("discovers the user's models and configures only Desktop", async () => {
-    discover.mockResolvedValue(["claude-opus-4-7", "claude-sonnet-5"]);
+  it("discovers all API models and configures only Desktop", async () => {
+    discover.mockResolvedValue([
+      "deepseek-v4-pro",
+      "hermes-3",
+      "claude-opus-4-7",
+      "claude-sonnet-5",
+    ]);
     configure.mockResolvedValue({
       view: { activated: true },
       apps: [{ app: "claude-desktop", ok: true }],
@@ -57,7 +62,9 @@ describe("DesktopConnectionDialog", () => {
     await waitFor(() =>
       expect(discover).toHaveBeenCalledWith("sk-user-desktop"),
     );
-    await screen.findByText("claude-opus-4-7");
+    await screen.findByText("deepseek-v4-pro");
+    expect(screen.getByText("hermes-3")).toBeInTheDocument();
+    expect(screen.getByText("claude-opus-4-7")).toBeInTheDocument();
     expect(screen.getByText("claude-sonnet-5")).toBeInTheDocument();
     fireEvent.click(screen.getByText("保存并接入"));
     await waitFor(() =>
