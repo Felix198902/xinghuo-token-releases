@@ -162,9 +162,14 @@ function renderCodexForm(onSubmit: (values: ProviderFormValues) => void) {
     <QueryClientProvider client={queryClient}>
       <ProviderForm
         appId="codex"
+        providerId="codex-official"
         submitLabel="save-provider"
         onSubmit={onSubmit}
         onCancel={vi.fn()}
+        initialData={{
+          name: "OpenAI Official",
+          settingsConfig: { auth: {}, config: "" },
+        }}
       />
     </QueryClientProvider>,
   );
@@ -200,7 +205,6 @@ describe("ProviderForm Codex Official managed account", () => {
     const onSubmit = vi.fn();
     renderCodexForm(onSubmit);
 
-    fireEvent.click(screen.getByRole("button", { name: /OpenAI Official/ }));
     fireEvent.click(
       await screen.findByRole("button", { name: "select-managed-account" }),
     );
@@ -210,8 +214,7 @@ describe("ProviderForm Codex Official managed account", () => {
     const submitted = onSubmit.mock.calls[0][0] as ProviderFormValues;
     expect(submitted).toEqual(
       expect.objectContaining({
-        name: "OpenAI Official (user@example.com)",
-        presetId: "codex-0",
+        name: "OpenAI Official",
         presetCategory: "official",
         meta: expect.objectContaining({
           providerType: "codex_oauth",
@@ -233,7 +236,6 @@ describe("ProviderForm Codex Official managed account", () => {
     const onSubmit = vi.fn();
     renderCodexForm(onSubmit);
 
-    fireEvent.click(screen.getByRole("button", { name: /OpenAI Official/ }));
     expect(
       await screen.findByRole("button", { name: "select-native-login" }),
     ).toBeInTheDocument();
@@ -257,7 +259,6 @@ describe("ProviderForm Codex Official managed account", () => {
     const onSubmit = vi.fn();
     renderCodexForm(onSubmit);
 
-    fireEvent.click(screen.getByRole("button", { name: /OpenAI Official/ }));
     fireEvent.click(
       await screen.findByRole("button", { name: "select-managed-account" }),
     );
@@ -498,7 +499,6 @@ describe("ProviderForm Codex Official managed account", () => {
     const onSubmit = vi.fn();
     renderCodexForm(onSubmit);
 
-    fireEvent.click(screen.getByRole("button", { name: /OpenAI Official/ }));
     fireEvent.click(
       await screen.findByRole("button", { name: "select-managed-account" }),
     );

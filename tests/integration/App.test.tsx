@@ -182,7 +182,7 @@ describe("星火单一服务入口", () => {
     expect(
       await screen.findByLabelText("activation.inputPlaceholder"),
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "跳过，进入主界面" }));
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
     expect(
       screen.queryByLabelText("activation.inputPlaceholder"),
     ).not.toBeInTheDocument();
@@ -209,7 +209,7 @@ describe("星火单一服务入口", () => {
     const first = renderApp();
     fireEvent.click(await screen.findByText("Codex"));
     fireEvent.click(screen.getByText("一键接入"));
-    fireEvent.click(screen.getByRole("button", { name: "跳过，进入主界面" }));
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
     fireEvent.click(screen.getByText("sessionManager.title"));
     expect(await screen.findByTestId("sessions-app")).toHaveTextContent(
       "claude",

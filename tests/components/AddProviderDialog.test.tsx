@@ -162,57 +162,14 @@ describe("AddProviderDialog", () => {
     });
   });
 
-  it("submits the optional managed account from the Codex Official preset", async () => {
-    const handleSubmit = vi.fn().mockResolvedValue(undefined);
-    const officialPresetIndex = codexProviderPresets.findIndex(
-      (preset) =>
-        preset.category === "official" && preset.providerType === "codex_oauth",
-    );
-    expect(officialPresetIndex).toBeGreaterThanOrEqual(0);
-
-    mockFormValues = {
-      name: "OpenAI Official",
-      websiteUrl: "https://chatgpt.com/codex",
-      settingsConfig: JSON.stringify({ auth: {}, config: "" }),
-      presetId: `codex-${officialPresetIndex}`,
-      presetCategory: "official",
-      meta: {
-        providerType: "codex_oauth",
-        authBinding: {
-          source: "managed_account",
-          authProvider: "codex_oauth",
-          accountId: "acct-managed",
-        },
-      },
-    };
-
-    render(
-      <AddProviderDialog
-        open
-        onOpenChange={vi.fn()}
-        appId="codex"
-        onSubmit={handleSubmit}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "common.add" }));
-
-    await waitFor(() => expect(handleSubmit).toHaveBeenCalledTimes(1));
-    expect(handleSubmit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        category: "official",
-        meta: expect.objectContaining({
-          authBinding: {
-            source: "managed_account",
-            authProvider: "codex_oauth",
-            accountId: "acct-managed",
-          },
-        }),
-      }),
-    );
-    expect(handleSubmit.mock.calls[0][0]).not.toHaveProperty(
-      "ensureCodexOfficialSeed",
-    );
+  it("keeps the upstream Codex Official preset out of the custom provider catalog", () => {
+    expect(
+      codexProviderPresets.some(
+        (preset) =>
+          preset.category === "official" &&
+          preset.providerType === "codex_oauth",
+      ),
+    ).toBe(false);
   });
 
   it("clears the nested auth panel before the dialog reopens", async () => {
