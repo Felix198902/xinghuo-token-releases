@@ -625,7 +625,7 @@ fn apply_desktop_connection_to_plan(
     plan.claude_desktop_models = resolve_desktop_models(None, models);
 }
 
-/// 只读发现当前用户密钥的 Claude 模型，不发送付费推理请求。
+/// 只读发现当前用户密钥的全部可用模型，不发送付费推理请求。
 pub async fn discover_desktop_models(input: &str) -> Result<Vec<String>, XinghuoError> {
     let record = active_record()?;
     let token = desktop_input_token(&record, input);
@@ -641,14 +641,11 @@ pub async fn discover_desktop_models(input: &str) -> Result<Vec<String>, Xinghuo
         })?;
     let total = models.len();
     let models = resolve_desktop_models(None, &models);
-    log::info!(
-        "[xinghuo] Claude Desktop 手动读取模型: 返回 {total} 个，匹配 {} 个",
-        models.len()
-    );
+    log::info!("[xinghuo] Claude Desktop 手动读取模型: 接入 {total} 个");
     if models.is_empty() {
         return Err(XinghuoError::new(
             "DESKTOP_MODELS",
-            "此密钥没有可用的 Claude 模型，原配置未修改",
+            "此密钥没有可用模型，原配置未修改",
         ));
     }
     Ok(models)
@@ -756,25 +753,8 @@ fn desktop_api_format(apps: Option<&api::ClientApps>) -> &'static str {
     }
 }
 
-fn resolve_desktop_models(config: Option<&api::ClientApp>, available: &[String]) -> Vec<String> {
-    let configured = config
-        .map(|entry| {
-            entry
-                .model
-                .as_deref()
-                .map(str::trim)
-                .filter(|id| !id.is_empty())
-                .map(|id| vec![id.to_string()])
-                .unwrap_or_else(|| entry.model_list())
-        })
-        .unwrap_or_default();
-    available
-        .iter()
-        .filter(|id| {
-            crate::claude_desktop_config::is_claude_safe_model_id(id) || configured.contains(id)
-        })
-        .cloned()
-        .collect()
+fn resolve_desktop_models(_config: Option<&api::ClientApp>, available: &[String]) -> Vec<String> {
+    available.to_vec()
 }
 
 /// 第三步（阻塞，放在 spawn_blocking 里调）：建立/更新供应商并切换，记下结果。
@@ -883,6 +863,7 @@ mod tests {
             &connection,
             &[
                 "gpt-5.5".into(),
+                "deepseek-v4-pro".into(),
                 "claude-opus-4-7".into(),
                 "claude-sonnet-5".into(),
             ],
@@ -893,12 +874,17 @@ mod tests {
         );
         assert_eq!(
             plan.claude_desktop_models,
-            vec!["claude-opus-4-7", "claude-sonnet-5"]
+            vec![
+                "gpt-5.5",
+                "deepseek-v4-pro",
+                "claude-opus-4-7",
+                "claude-sonnet-5"
+            ]
         );
         assert_eq!(plan.codex_model, DEFAULT_MODEL);
         assert_eq!(plan.claude_desktop_api_format, "openai_chat");
-        apply_desktop_connection_to_plan(&mut plan, &connection, &["claude-sonnet-5".into()]);
-        assert_eq!(plan.claude_desktop_models, vec!["claude-sonnet-5"]);
+        apply_desktop_connection_to_plan(&mut plan, &connection, &["deepseek-v4-pro".into()]);
+        assert_eq!(plan.claude_desktop_models, vec!["deepseek-v4-pro"]);
         assert!(plan.claude_desktop_model.is_none());
     }
 
@@ -943,37 +929,35 @@ mod tests {
     }
 
     #[test]
-    fn desktop_discovers_claude_models_without_codex_fallback() {
+    fn desktop_discovers_all_models_without_single_model_fallback() {
         let available = vec![
             "gpt-5.5".into(),
+            "deepseek-v4-pro".into(),
+            "hermes-3".into(),
             "claude-sonnet-5".into(),
             "claude-opus-4-8".into(),
         ];
+        assert_eq!(resolve_desktop_models(None, &available), available);
         assert_eq!(
-            resolve_desktop_models(None, &available),
-            vec!["claude-sonnet-5", "claude-opus-4-8"]
+            resolve_desktop_models(None, &["deepseek-v4-pro".into()]),
+            vec!["deepseek-v4-pro"]
         );
-        assert!(resolve_desktop_models(None, &["gpt-5.5".into()]).is_empty());
         assert!(resolve_desktop_models(None, &[]).is_empty());
     }
 
     #[test]
-    fn desktop_catalog_keeps_safe_models_and_checks_key_permissions() {
+    fn desktop_catalog_ignores_legacy_allowlist_and_checks_key_permissions() {
         let config: api::ClientApp = serde_json::from_value(serde_json::json!({
             "enabled": true, "models": ["claude-opus-5", "claude-unavailable"]
         }))
         .unwrap();
-        assert_eq!(
-            resolve_desktop_models(
-                Some(&config),
-                &[
-                    "claude-opus-5".into(),
-                    "claude-sonnet-5-5".into(),
-                    "gpt-5.5".into()
-                ],
-            ),
-            vec!["claude-opus-5", "claude-sonnet-5-5"]
-        );
+        let available = vec![
+            "deepseek-v4-pro".into(),
+            "claude-opus-5".into(),
+            "claude-sonnet-5-5".into(),
+            "gpt-5.5".into(),
+        ];
+        assert_eq!(resolve_desktop_models(Some(&config), &available), available);
         assert!(resolve_desktop_models(Some(&config), &[]).is_empty());
     }
 
