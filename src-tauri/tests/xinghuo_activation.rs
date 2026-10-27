@@ -1108,67 +1108,91 @@ fn desktop_repeated_connection_checks_files_without_rewriting() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn deactivation_reactivation_reuses_persistent_device_and_wallet() {
-    use axum::{routing::post, Json, Router};
+async fn cdk_exchange_is_device_free_and_idempotent() {
+    use axum::{
+        routing::{get, post},
+        Json, Router,
+    };
     use serde_json::Value;
     use std::sync::{Arc, Mutex};
 
     let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
     reset_test_fs();
     let local = ensure_test_home().join(".xinghuo-token");
-    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
-    let captured = requests.clone();
-    let app = Router::new().route(
-        "/api/v1/plugin/activate",
-        post(move |Json(body): Json<Value>| {
-            let captured = captured.clone();
-            async move {
-                captured.lock().unwrap().push(body);
-                Json(json!({"ok": true, "token": "sk-recovered-key-000000"}))
-            }
-        }),
-    );
+    let activations = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let activation_capture = activations.clone();
+    let tokens = Arc::new(Mutex::new(Vec::<String>::new()));
+    let status_capture = tokens.clone();
+    let app = Router::new()
+        .route(
+            "/api/v1/plugin/activate",
+            post(move |Json(body): Json<Value>| {
+                let captured = activation_capture.clone();
+                async move {
+                    captured.lock().unwrap().push(body);
+                    Json(json!({"ok": true, "token": "sk-shared-key-000000"}))
+                }
+            }),
+        )
+        .route(
+            "/api/v1/plugin/status",
+            get(move |headers: axum::http::HeaderMap| {
+                let captured = status_capture.clone();
+                async move {
+                    captured.lock().unwrap().push(
+                        headers["authorization"]
+                            .to_str()
+                            .unwrap()
+                            .trim_start_matches("Bearer ")
+                            .to_string(),
+                    );
+                    Json(json!({
+                        "ok": true,
+                        "valid": true,
+                        "plan": "shared",
+                        "quota": {"unit": "USD", "total": 100, "used": 11.5, "remaining": 88.5},
+                        "balance_scope": "account"
+                    }))
+                }
+            }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     std::env::set_var("XINGHUO_SITE_URL", format!("http://{address}"));
 
-    let first = cc_switch_lib::xinghuo::obtain_key("XH-TEST-REACTIVATION")
+    let first = cc_switch_lib::xinghuo::obtain_key("XH-TEST-SHARED-QUOTA")
         .await
         .unwrap();
-    assert_eq!(first.record.token, "sk-recovered-key-000000");
-    let saved_device = std::fs::read_to_string(local.join("device_id")).unwrap();
-    assert!(!saved_device.trim().is_empty());
+    assert_eq!(first.record.token, "sk-shared-key-000000");
+    assert_eq!(first.record.quota.unwrap().remaining, 88.5);
+    assert_eq!(first.record.valid, Some(true));
+    assert!(!local.join("device_id").exists());
 
-    let state = Arc::new(create_test_state().unwrap());
-    let deactivated = {
-        let state = state.clone();
-        tokio::task::spawn_blocking(move || cc_switch_lib::xinghuo::deactivate(&state))
-            .await
-            .unwrap()
-    };
-    assert!(deactivated.apps.iter().all(|app| app.ok));
-    assert!(!deactivated.view.activated);
-    assert!(deactivated.view.has_wallet);
-    assert!(!local.join("activation.json").exists());
-
-    let recovered = cc_switch_lib::xinghuo::obtain_key("XH-TEST-REACTIVATION")
+    let second = cc_switch_lib::xinghuo::obtain_key("XH-TEST-SHARED-QUOTA")
         .await
         .unwrap();
-    assert_eq!(recovered.record.token, first.record.token);
+    assert_eq!(second.record.token, first.record.token);
+    assert!(second.renewal);
+
+    let direct = cc_switch_lib::xinghuo::obtain_key("sk-shared-key-000000")
+        .await
+        .unwrap();
+    assert_eq!(direct.record.source, "key");
+    assert_eq!(direct.record.quota.unwrap().remaining, 88.5);
+    assert_eq!(direct.record.valid, Some(true));
+
+    let activations = activations.lock().unwrap();
+    assert_eq!(activations.len(), 1);
+    assert!(activations[0].get("device_id").is_none());
+    assert!(activations[0].get("device_name").is_none());
+    assert_eq!(activations[0]["cdk"], "XH-TEST-SHARED-QUOTA");
     assert_eq!(
-        std::fs::read_to_string(local.join("device_id")).unwrap(),
-        saved_device
+        tokens.lock().unwrap().as_slice(),
+        ["sk-shared-key-000000", "sk-shared-key-000000"]
     );
 
-    let requests = requests.lock().unwrap();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0]["token"], "");
-    assert_eq!(requests[1]["token"], "sk-recovered-key-000000");
-    assert_eq!(requests[0]["device_id"], saved_device.trim());
-    assert_eq!(requests[1]["device_id"], requests[0]["device_id"]);
-
-    drop(requests);
+    drop(activations);
     std::env::remove_var("XINGHUO_SITE_URL");
     server.abort();
 }

@@ -12,7 +12,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { settingsApi } from "@/lib/api";
-import { checkAppUpdate, type AppUpdateInfo } from "@/lib/api/update";
+import {
+  checkAppUpdate,
+  installAppUpdate,
+  type AppUpdateInfo,
+} from "@/lib/api/update";
 import { extractErrorMessage } from "@/utils/errorUtils";
 
 const DISMISSED_VERSION_KEY = "xinghuo:update:dismissed-version";
@@ -21,13 +25,18 @@ export function AppUpdateDialog() {
   const { t } = useTranslation();
   const [update, setUpdate] = useState<AppUpdateInfo | null>(null);
   const [open, setOpen] = useState(false);
-  const [opening, setOpening] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [isPortable, setIsPortable] = useState(false);
 
   useEffect(() => {
     let active = true;
     const timer = window.setTimeout(async () => {
       try {
-        const result = await checkAppUpdate();
+        const [result, portable] = await Promise.all([
+          checkAppUpdate(),
+          settingsApi.isPortable(),
+        ]);
+        if (active) setIsPortable(portable);
         if (
           active &&
           result.available &&
@@ -47,25 +56,42 @@ export function AppUpdateDialog() {
   }, []);
 
   const dismiss = () => {
+    if (installing) return;
     if (update) {
       localStorage.setItem(DISMISSED_VERSION_KEY, update.latestVersion);
     }
     setOpen(false);
   };
 
-  const download = async () => {
-    if (!update || opening) return;
-    setOpening(true);
+  const install = async () => {
+    if (!update || installing) return;
+    setInstalling(true);
     try {
-      await settingsApi.openExternal(update.downloadUrl);
-      setOpen(false);
+      if (isPortable) {
+        await settingsApi.openExternal(update.downloadUrl);
+        setOpen(false);
+        return;
+      }
+      const installed = await installAppUpdate();
+      if (!installed) {
+        toast.success(t("settings.upToDate"), { closeButton: true });
+        setOpen(false);
+      }
     } catch (error) {
-      toast.error(t("settings.appUpdateOpenFailed"), {
+      toast.error(t("settings.updateFailed"), {
         description: extractErrorMessage(error),
         closeButton: true,
       });
+      try {
+        await settingsApi.openExternal(update.downloadUrl);
+      } catch (fallbackError) {
+        console.error(
+          "[AppUpdateDialog] Fallback download failed",
+          fallbackError,
+        );
+      }
     } finally {
-      setOpening(false);
+      setInstalling(false);
     }
   };
 
@@ -96,16 +122,23 @@ export function AppUpdateDialog() {
           </div>
         )}
         <DialogFooter className="flex-row justify-end gap-2">
-          <Button type="button" variant="ghost" onClick={dismiss}>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={dismiss}
+            disabled={installing}
+          >
             {t("settings.appUpdateDismiss")}
           </Button>
-          <Button type="button" onClick={download} disabled={opening}>
-            {opening ? (
+          <Button type="button" onClick={install} disabled={installing}>
+            {installing ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
               <Download className="h-4 w-4" />
             )}
-            {t("settings.appUpdateDownload")}
+            {installing
+              ? t("settings.updating")
+              : t("settings.appUpdateDownload")}
           </Button>
         </DialogFooter>
       </DialogContent>

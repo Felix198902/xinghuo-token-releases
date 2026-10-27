@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   checkAppUpdate,
+  installAppUpdate,
   getToolVersions,
   openExternal,
   getVersion,
@@ -10,6 +11,7 @@ const {
   toastError,
 } = vi.hoisted(() => ({
   checkAppUpdate: vi.fn(),
+  installAppUpdate: vi.fn(),
   getToolVersions: vi.fn(),
   openExternal: vi.fn(),
   getVersion: vi.fn(),
@@ -17,7 +19,7 @@ const {
   toastError: vi.fn(),
 }));
 
-vi.mock("@/lib/api/update", () => ({ checkAppUpdate }));
+vi.mock("@/lib/api/update", () => ({ checkAppUpdate, installAppUpdate }));
 vi.mock("@/lib/api", () => ({
   settingsApi: { getToolVersions, openExternal },
 }));
@@ -47,9 +49,10 @@ describe("AboutSection app update check", () => {
     vi.clearAllMocks();
     getVersion.mockResolvedValue("3.20.4");
     getToolVersions.mockResolvedValue([]);
+    installAppUpdate.mockResolvedValue(true);
   });
 
-  it("offers the Gitee download when a newer version is found", async () => {
+  it("installs a newer Gitee release in the app", async () => {
     checkAppUpdate.mockResolvedValue(result);
     render(<AboutSection isPortable={false} />);
     fireEvent.click(
@@ -61,7 +64,24 @@ describe("AboutSection app update check", () => {
     expect(message).toContain("settings.updateAvailable");
     expect(message).toContain("3.21.0");
     options.action.onClick();
+    await waitFor(() => expect(installAppUpdate).toHaveBeenCalledTimes(1));
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(screen.getByTestId("app-version-footer")).toHaveTextContent(
+      "v3.20.4",
+    );
+  });
+
+  it("keeps manual download for portable installations", async () => {
+    checkAppUpdate.mockResolvedValue(result);
+    render(<AboutSection isPortable={true} />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "settings.checkForUpdates" }),
+    );
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+    toastSuccess.mock.calls[0][1].action.onClick();
+
     expect(openExternal).toHaveBeenCalledWith(result.downloadUrl);
+    expect(installAppUpdate).not.toHaveBeenCalled();
   });
 
   it("reports an up-to-date app", async () => {

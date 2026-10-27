@@ -1,17 +1,28 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { checkAppUpdate, openExternal } = vi.hoisted(() => ({
+const {
+  checkAppUpdate,
+  installAppUpdate,
+  isPortable,
+  openExternal,
+  toastError,
+} = vi.hoisted(() => ({
   checkAppUpdate: vi.fn(),
+  installAppUpdate: vi.fn(),
+  isPortable: vi.fn(),
   openExternal: vi.fn(),
+  toastError: vi.fn(),
 }));
 
-vi.mock("@/lib/api/update", () => ({ checkAppUpdate }));
-vi.mock("@/lib/api", () => ({ settingsApi: { openExternal } }));
+vi.mock("@/lib/api/update", () => ({ checkAppUpdate, installAppUpdate }));
+vi.mock("@/lib/api", () => ({ settingsApi: { isPortable, openExternal } }));
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("sonner", () => ({
+  toast: { error: toastError, success: vi.fn() },
+}));
 
 import { AppUpdateDialog } from "@/components/AppUpdateDialog";
 
@@ -36,15 +47,20 @@ describe("AppUpdateDialog", () => {
     vi.useFakeTimers();
     localStorage.clear();
     checkAppUpdate.mockReset();
+    installAppUpdate.mockReset();
+    installAppUpdate.mockResolvedValue(true);
+    isPortable.mockReset();
+    isPortable.mockResolvedValue(false);
     openExternal.mockReset();
     openExternal.mockResolvedValue(undefined);
+    toastError.mockReset();
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("shows a newer Gitee release and opens its download page", async () => {
+  it("shows a newer Gitee release and installs it in the app", async () => {
     checkAppUpdate.mockResolvedValue(available);
     render(<AppUpdateDialog />);
     await runStartupCheck();
@@ -56,6 +72,21 @@ describe("AppUpdateDialog", () => {
       screen.getByRole("button", { name: "settings.appUpdateDownload" }),
     );
     await act(async () => {});
+    expect(installAppUpdate).toHaveBeenCalledTimes(1);
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
+  it("opens the release page only when installation fails", async () => {
+    checkAppUpdate.mockResolvedValue(available);
+    installAppUpdate.mockRejectedValue(new Error("download failed"));
+    render(<AppUpdateDialog />);
+    await runStartupCheck();
+    fireEvent.click(
+      screen.getByRole("button", { name: "settings.appUpdateDownload" }),
+    );
+    await act(async () => {});
+
+    expect(toastError).toHaveBeenCalled();
     expect(openExternal).toHaveBeenCalledWith(available.downloadUrl);
   });
 

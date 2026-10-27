@@ -453,6 +453,7 @@ pub fn run() {
             }
         })
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -1338,6 +1339,7 @@ pub fn run() {
             commands::pick_directory,
             commands::open_external,
             update::check_app_update,
+            update::install_app_update,
             commands::get_init_error,
             commands::get_migration_result,
             commands::get_skills_migration_result,
@@ -1369,6 +1371,7 @@ pub fn run() {
             commands::discover_xinghuo_desktop_models,
             commands::configure_xinghuo_desktop,
             commands::refresh_xinghuo_status,
+            commands::export_xinghuo_diagnostics,
             commands::deactivate_xinghuo,
             commands::restore_xinghuo_config,
             commands::is_portable_mode,

@@ -10,12 +10,10 @@ const KNOWN_CODES: Record<string, string> = {
   CDK_NOT_FOUND: "activation.errors.cdkNotFound",
   CDK_EXPIRED: "activation.errors.cdkExpired",
   CDK_DISABLED: "activation.errors.cdkDisabled",
-  DEVICE_LIMIT: "activation.errors.deviceLimit",
   CDK_IS_REDEEM_CODE: "activation.errors.redeemCode",
   CDK_TOKEN_REQUIRED: "activation.errors.tokenRequired",
   CDK_CLAIMED: "activation.errors.cdkClaimed",
   RATE_LIMITED: "activation.errors.rateLimited",
-  DEVICE_ID_INVALID: "activation.errors.deviceIdInvalid",
   CDK_RETRY: "activation.errors.retry",
   KEY_INVALID: "activation.errors.keyInvalid",
 };

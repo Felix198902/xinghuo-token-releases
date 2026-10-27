@@ -1,15 +1,13 @@
-//! 星火激活：用激活码（CDK）或 sk- 密钥拿到一把可用的密钥，写盘后为
-//! Claude Code / Claude Desktop / Codex / OpenCode 以及服务端下发的扩展平台
-//! （Gemini / Grok Build / OpenClaw / Hermes / MiniMax Code / Pi）建立固定 ID
-//! 的供应商并切换过去。
+//! 星火激活：CDK 无设备绑定地兑换 SK，SK 作为 Bearer 凭据，
+//! 写盘后为各支持平台建立固定 ID 的供应商并切换过去。
 //!
-//! 三条硬规则（与 xinghuo-connect 一致）：
-//! 1. 拿到密钥第一时间写盘（activation.json + wallet.json），再做别的——
-//!    激活码在服务端已经消费，密钥丢了顾客只能找管理员；
-//! 2. 续费时把本机已有的密钥放进 `token` 字段，新额度叠加到同一把密钥；
-//! 3. 顾客可见文案只写现象、错误码和联系方式——这里只回传错误码，文案由前端渲染。
+//! 三条硬规则：
+//! 1. 凭据第一时间写盘（activation.json + wallet.json），再做别的；
+//! 2. 不绑定设备，CDK/SK 最终共用状态与额度查询；
+//! 3. 顾客可见文案只写现象、错误码和联系方式，日志不得记录完整凭据。
 
 mod api;
+pub mod diagnostics;
 mod providers;
 pub mod restore;
 mod storage;
@@ -18,6 +16,7 @@ mod usage;
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::app_config::AppType;
 use crate::store::AppState;
@@ -263,16 +262,6 @@ pub(crate) fn mask_key(token: &str) -> String {
     format!("{head}…{tail}")
 }
 
-fn device_name() -> String {
-    let os = match std::env::consts::OS {
-        "macos" => "macOS",
-        "windows" => "Windows",
-        "linux" => "Linux",
-        other => other,
-    };
-    format!("{os} · {PROVIDER_NAME} {}", env!("CARGO_PKG_VERSION"))
-}
-
 fn view_of(record: Option<&ActivationRecord>) -> ActivationView {
     let has_wallet = storage::load_wallet().is_some_and(|w| !w.token.is_empty());
     let Some(record) = record.filter(|r| !r.token.is_empty()) else {
@@ -319,64 +308,70 @@ pub fn current_view() -> ActivationView {
     view_of(storage::load_activation().as_ref())
 }
 
-/// 第一步：校验输入、向服务端换取密钥，并在返回前写盘。
-///
-/// - `sk-` 开头：按密钥处理，只有 401 / 403 判无效，网络不通、限流、5xx 都放行；
-/// - 其余按激活码处理：请求体带上本机已有密钥（当前激活优先，其次钱包）作为续费凭据。
+/// 第一步：校验输入、取得可用 SK，并在返回前写盘。
+/// CDK 通过无设备绑定的兑换接口换 SK，随后与直接输入的 SK 走相同状态与额度查询。
+/// 相同 CDK 在本机重复提交时直接复用激活记录，避免重复兑换触发限流。
 pub async fn obtain_key(input: &str) -> Result<KeyGrant, XinghuoError> {
     let input = input.trim();
     if input.is_empty() {
         return Err(XinghuoError::new("INPUT_EMPTY", "激活码或密钥为空"));
     }
 
+    let input_hash = format!("{:x}", Sha256::digest(input.as_bytes()));
     let existing = storage::load_activation().filter(|r| !r.token.is_empty());
+    if let Some(record) = existing.clone().filter(|record| {
+        record.source == "cdk" && record.input_hash.as_deref() == Some(input_hash.as_str())
+    }) {
+        log::info!("[xinghuo] reusing activation for identical CDK input");
+        return Ok(KeyGrant {
+            record,
+            renewal: true,
+        });
+    }
     let mut record = existing.clone().unwrap_or_default();
 
     if is_api_key(input) {
-        let status = match api::status(&site_url(), input).await {
-            Ok(status) => Some(status),
-            Err(error) if error.code == "KEY_INVALID" => return Err(error),
-            Err(error) => {
-                log::warn!("[xinghuo] 密钥探活失败，按规则放行: {error}");
-                None
-            }
-        };
         record.token = input.to_string();
         record.source = "key".to_string();
-        if let Some(status) = status {
-            record.plan = status.plan.filter(|p| !p.is_empty());
-            record.expires_at = status.expires_at;
-            record.quota = status.quota;
-            record.balance_scope = status.balance_scope;
-            record.valid = status.valid;
-        } else {
-            record.plan = None;
-            record.expires_at = None;
-            record.quota = None;
-            record.balance_scope = None;
-            record.valid = None;
-        }
     } else {
         let prior_token = existing
             .as_ref()
             .map(|r| r.token.clone())
             .or_else(|| storage::load_wallet().map(|w| w.token))
             .filter(|t| !t.is_empty());
-        let reply = api::activate(
-            &site_url(),
-            input,
-            &storage::device_id(),
-            &device_name(),
-            prior_token.as_deref(),
-        )
-        .await?;
+        let reply = api::activate(&site_url(), input, prior_token.as_deref()).await?;
         record.token = reply.token;
         record.source = "cdk".to_string();
-        record.plan = reply.plan.filter(|p| !p.is_empty());
-        record.expires_at = reply.expires_at;
-        record.quota = reply.quota;
-        record.balance_scope = reply.balance_scope;
-        record.valid = Some(true);
+    }
+    record.input_hash = Some(input_hash);
+    log::info!(
+        "[xinghuo] activation started: source={}, device_binding=false",
+        record.source
+    );
+
+    let status = match api::status(&site_url(), &record.token).await {
+        Ok(status) => {
+            log::info!("[xinghuo] activation status query succeeded");
+            Some(status)
+        }
+        Err(error) if error.code == "KEY_INVALID" => return Err(error),
+        Err(error) => {
+            log::warn!("[xinghuo] 密钥探活失败，按规则放行: {error}");
+            None
+        }
+    };
+    if let Some(status) = status {
+        record.plan = status.plan.filter(|p| !p.is_empty());
+        record.expires_at = status.expires_at;
+        record.quota = status.quota;
+        record.balance_scope = status.balance_scope;
+        record.valid = status.valid;
+    } else {
+        record.plan = None;
+        record.expires_at = None;
+        record.quota = None;
+        record.balance_scope = None;
+        record.valid = None;
     }
 
     let renewal = existing

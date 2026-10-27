@@ -1,6 +1,14 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter};
+use tauri_plugin_updater::UpdaterExt;
+
+#[derive(Clone, Serialize)]
+struct UpdateDownloadProgress {
+    downloaded: u64,
+    total: Option<u64>,
+}
 
 #[cfg(test)]
 const GITHUB_REPOSITORY: &str = "Felix198902/xinghuo-token-releases";
@@ -10,6 +18,10 @@ const GITHUB_LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/Felix198902/xinghuo-token-releases/releases/latest";
 const GITEE_LATEST_RELEASE_URL: &str =
     "https://gitee.com/api/v5/repos/jerrylinap/xinghuo-token-releases/releases/latest";
+const GITHUB_LATEST_MANIFEST_URL: &str =
+    "https://github.com/Felix198902/xinghuo-token-releases/releases/latest/download/latest.json";
+const GITEE_RELEASE_DOWNLOAD_URL: &str =
+    "https://gitee.com/jerrylinap/xinghuo-token-releases/releases/download";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Copy)]
@@ -163,32 +175,19 @@ async fn fetch_release(
     parse_release(current_version, source, &body)
 }
 
-fn select_newer_release(github: AppUpdateInfo, gitee: AppUpdateInfo) -> AppUpdateInfo {
-    if compare_versions(&gitee.latest_version, &github.latest_version)
-        .is_some_and(|order| order == std::cmp::Ordering::Greater)
-    {
-        gitee
-    } else {
-        github
-    }
-}
-
 async fn check_update_from(
     current_version: &str,
     github_url: &str,
     gitee_url: &str,
 ) -> Result<AppUpdateInfo, String> {
-    let (github, gitee) = tokio::join!(
-        fetch_release(current_version, GITHUB_SOURCE, github_url),
-        fetch_release(current_version, GITEE_SOURCE, gitee_url),
-    );
-    match (github, gitee) {
-        (Ok(github), Ok(gitee)) => Ok(select_newer_release(github, gitee)),
-        (Ok(update), Err(error)) | (Err(error), Ok(update)) => {
-            log::warn!("[update] 一个更新源不可用，使用备用来源: {error}");
-            Ok(update)
+    match fetch_release(current_version, GITEE_SOURCE, gitee_url).await {
+        Ok(update) => Ok(update),
+        Err(gitee_error) => {
+            log::warn!("[update] Gitee 不可用，尝试 GitHub 备用源: {gitee_error}");
+            fetch_release(current_version, GITHUB_SOURCE, github_url)
+                .await
+                .map_err(|github_error| format!("{gitee_error}；{github_error}"))
         }
-        (Err(github), Err(gitee)) => Err(format!("{github}；{gitee}")),
     }
 }
 
@@ -200,6 +199,87 @@ pub async fn check_app_update() -> Result<AppUpdateInfo, String> {
         GITEE_LATEST_RELEASE_URL,
     )
     .await
+}
+
+fn updater_endpoints(release: &AppUpdateInfo) -> Result<Vec<url::Url>, String> {
+    let primary = if release.source == GITEE_SOURCE.name {
+        format!(
+            "{}/v{}/latest.json",
+            GITEE_RELEASE_DOWNLOAD_URL, release.latest_version
+        )
+    } else {
+        GITHUB_LATEST_MANIFEST_URL.to_string()
+    };
+    let mut endpoints = vec![url::Url::parse(&primary).map_err(|error| error.to_string())?];
+    if release.source == GITEE_SOURCE.name {
+        endpoints
+            .push(url::Url::parse(GITHUB_LATEST_MANIFEST_URL).map_err(|error| error.to_string())?);
+    }
+    Ok(endpoints)
+}
+
+#[tauri::command]
+pub async fn install_app_update(app: AppHandle) -> Result<bool, String> {
+    let release = check_app_update().await?;
+    if !release.available {
+        return Ok(false);
+    }
+    let updater = app
+        .updater_builder()
+        .endpoints(updater_endpoints(&release)?)
+        .map_err(|error| format!("配置更新源失败: {error}"))?
+        .build()
+        .map_err(|error| format!("初始化更新器失败: {error}"))?;
+    let Some(update) = updater
+        .check()
+        .await
+        .map_err(|error| format!("检查更新失败: {error}"))?
+    else {
+        return Ok(false);
+    };
+
+    log::info!("开始下载应用更新: {}", update.version);
+    let progress_handle = app.clone();
+    let mut downloaded = 0_u64;
+    let bytes = update
+        .download(
+            move |chunk_len, total| {
+                downloaded = downloaded.saturating_add(chunk_len as u64);
+                let _ = progress_handle.emit(
+                    "update-download-progress",
+                    UpdateDownloadProgress { downloaded, total },
+                );
+            },
+            || {},
+        )
+        .await
+        .map_err(|error| format!("下载更新失败: {error}"))?;
+
+    log::info!("开始安装应用更新: {}", update.version);
+
+    #[cfg(target_os = "windows")]
+    {
+        crate::save_window_state_before_exit(&app);
+        crate::cleanup_before_exit(&app).await;
+        crate::remove_tray_icon_before_exit(&app);
+        crate::destroy_single_instance_lock(&app);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        update.install(bytes).map_err(|error| {
+            format!("Windows 更新安装失败: {error}。请重启应用或重新开启代理后再试。")
+        })?;
+        Ok(true)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        update
+            .install(bytes)
+            .map_err(|error| format!("安装更新失败: {error}"))?;
+        crate::save_window_state_before_exit(&app);
+        crate::cleanup_before_exit(&app).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        crate::restart_process(&app);
+    }
 }
 
 #[cfg(test)]
@@ -278,6 +358,36 @@ mod tests {
             .unwrap()
             .available
         );
+    }
+
+    #[test]
+    fn gitee_manifest_uses_its_release_tag_and_github_is_fallback() {
+        let gitee = parse_release(
+            "3.20.4",
+            GITEE_SOURCE,
+            &release(
+                "v3.21.0",
+                "https://gitee.com/jerrylinap/xinghuo-token-releases",
+            ),
+        )
+        .unwrap();
+        let endpoints = updater_endpoints(&gitee).unwrap();
+        assert_eq!(
+            endpoints[0].as_str(),
+            "https://gitee.com/jerrylinap/xinghuo-token-releases/releases/download/v3.21.0/latest.json"
+        );
+        assert_eq!(endpoints[1].as_str(), GITHUB_LATEST_MANIFEST_URL);
+
+        let github = parse_release(
+            "3.20.4",
+            GITHUB_SOURCE,
+            &release(
+                "v3.21.0",
+                "https://github.com/Felix198902/xinghuo-token-releases",
+            ),
+        )
+        .unwrap();
+        assert_eq!(updater_endpoints(&github).unwrap().len(), 1);
     }
 
     #[test]
@@ -363,20 +473,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn both_sources_are_compared_and_fail_together() {
+    async fn gitee_is_preferred_and_source_errors_are_combined() {
         let (base, server) = serve_releases(
             (
                 StatusCode::OK,
                 release(
-                    "3.21.0",
-                    "https://github.com/wfpromax/xinghuo-token/releases/v3.21.0",
+                    "3.22.0",
+                    "https://github.com/wfpromax/xinghuo-token/releases/v3.22.0",
                 ),
             ),
             (
                 StatusCode::OK,
                 release(
-                    "3.22.0",
-                    "https://gitee.com/wfpromax/xinghuo-token/releases/v3.22.0",
+                    "3.21.0",
+                    "https://gitee.com/wfpromax/xinghuo-token/releases/v3.21.0",
                 ),
             ),
         )
@@ -388,7 +498,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(update.latest_version, "3.22.0");
+        assert_eq!(update.latest_version, "3.21.0");
         assert_eq!(update.source, "Gitee");
         server.abort();
 

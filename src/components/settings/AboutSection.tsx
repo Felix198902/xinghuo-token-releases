@@ -25,7 +25,11 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { getVersion } from "@tauri-apps/api/app";
 import { settingsApi } from "@/lib/api";
-import { checkAppUpdate } from "@/lib/api/update";
+import {
+  checkAppUpdate,
+  installAppUpdate,
+  type AppUpdateInfo,
+} from "@/lib/api/update";
 import type {
   ToolInstallation,
   ToolInstallationReport,
@@ -215,6 +219,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
   );
   const [showInstallCommands, setShowInstallCommands] = useState(false);
   const [checkingAppUpdate, setCheckingAppUpdate] = useState(false);
+  const [installingAppUpdate, setInstallingAppUpdate] = useState(false);
 
   const [wslShellByTool, setWslShellByTool] = useState<
     Record<string, WslShellPreference>
@@ -759,8 +764,30 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
 
   const handleCancelUpgrade = useCallback(() => setPendingUpgrade(null), []);
 
+  const handleInstallAppUpdate = useCallback(
+    async (update: AppUpdateInfo) => {
+      if (installingAppUpdate) return;
+      setInstallingAppUpdate(true);
+      try {
+        const installed = await installAppUpdate();
+        if (!installed) {
+          toast.success(t("settings.upToDate"), { closeButton: true });
+        }
+      } catch (error) {
+        toast.error(t("settings.updateFailed"), {
+          description: extractErrorMessage(error),
+          closeButton: true,
+        });
+        await settingsApi.openExternal(update.downloadUrl).catch(() => {});
+      } finally {
+        setInstallingAppUpdate(false);
+      }
+    },
+    [installingAppUpdate, t],
+  );
+
   const handleCheckAppUpdate = useCallback(async () => {
-    if (checkingAppUpdate) return;
+    if (checkingAppUpdate || installingAppUpdate) return;
     setCheckingAppUpdate(true);
     try {
       const result = await checkAppUpdate();
@@ -770,7 +797,13 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
           {
             action: {
               label: t("settings.appUpdateDownload"),
-              onClick: () => void settingsApi.openExternal(result.downloadUrl),
+              onClick: () => {
+                if (isPortable) {
+                  void settingsApi.openExternal(result.downloadUrl);
+                } else {
+                  void handleInstallAppUpdate(result);
+                }
+              },
             },
             closeButton: true,
           },
@@ -786,7 +819,13 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
     } finally {
       setCheckingAppUpdate(false);
     }
-  }, [checkingAppUpdate, t]);
+  }, [
+    checkingAppUpdate,
+    handleInstallAppUpdate,
+    installingAppUpdate,
+    isPortable,
+    t,
+  ]);
 
   const displayVersion = version ?? t("common.unknown");
 
@@ -820,33 +859,11 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
         className="rounded-xl border border-border bg-gradient-to-br from-card/80 to-card/40 p-6 space-y-5 shadow-sm"
       >
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-8">
-            <div className="flex flex-col items-center gap-2">
-              <div className="flex items-center gap-2">
-                <img src={appIcon} alt="星火无限token" className="h-5 w-5" />
-                <h4 className="text-lg font-semibold text-foreground">
-                  星火无限token
-                </h4>
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge variant="outline" className="gap-1.5 bg-background/80">
-                  <span className="text-muted-foreground">
-                    {t("common.version")}
-                  </span>
-                  {isLoadingVersion ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <span className="font-medium">{`v${displayVersion}`}</span>
-                  )}
-                </Badge>
-                {isPortable && (
-                  <Badge variant="secondary" className="gap-1.5">
-                    <Info className="h-3 w-3" />
-                    {t("settings.portableMode")}
-                  </Badge>
-                )}
-              </div>
-            </div>
+          <div className="flex items-center gap-2">
+            <img src={appIcon} alt="星火无限token" className="h-5 w-5" />
+            <h4 className="text-lg font-semibold text-foreground">
+              星火无限token
+            </h4>
           </div>
 
           <div className="flex items-center gap-2">
@@ -855,7 +872,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
               variant="outline"
               size="sm"
               onClick={handleCheckAppUpdate}
-              disabled={checkingAppUpdate}
+              disabled={checkingAppUpdate || installingAppUpdate}
               className="h-8 gap-1.5 text-xs"
             >
               {checkingAppUpdate ? (
@@ -1197,6 +1214,26 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
           </div>
         )}
       </motion.div>
+
+      <footer
+        data-testid="app-version-footer"
+        className="flex flex-wrap items-center justify-center gap-2 border-t border-border/60 pt-4 text-xs text-muted-foreground"
+      >
+        <Badge variant="outline" className="gap-1.5 bg-background/80">
+          <span>{t("common.version")}</span>
+          {isLoadingVersion ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <span className="font-medium text-foreground">{`v${displayVersion}`}</span>
+          )}
+        </Badge>
+        {isPortable && (
+          <Badge variant="secondary" className="gap-1.5">
+            <Info className="h-3 w-3" />
+            {t("settings.portableMode")}
+          </Badge>
+        )}
+      </footer>
 
       <ToolUpgradeConfirmDialog
         isOpen={pendingUpgrade !== null}

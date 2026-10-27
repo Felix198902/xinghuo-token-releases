@@ -1,4 +1,4 @@
-//! 星火服务端接口：激活码换密钥、查状态、客户端配置、模型列表。
+//! 星火服务端接口：凭据状态、客户端配置、模型列表。
 //!
 //! 插件契约的错误形状是 `{ok:false, code, message}`。5xx 或不是业务回包
 //! （空响应、HTML 错误页）一律折成 `HTTP_ERROR`，顾客只看到 `XH-4<状态码>`。
@@ -40,11 +40,12 @@ fn network_error(error: &reqwest::Error) -> XinghuoError {
 
 /// 发请求并在瞬断时重试。
 ///
-/// `idempotent = false`（激活）只在连接都没建起来时重试：一次性请求发出去了
-/// 就不能再发第二遍。查询类请求在超时时也会重试。
+/// `idempotent = false` 只在连接都没建起来时重试；查询类请求在超时时也会重试。
+/// 已收到响应的 429 不重试，避免进一步触发限流。
 async fn send(
     build: impl Fn(&Client) -> RequestBuilder,
     idempotent: bool,
+    operation: &'static str,
 ) -> Result<HttpReply, XinghuoError> {
     let client = crate::proxy::http_client::get();
     let mut attempt = 0;
@@ -57,10 +58,22 @@ async fn send(
         match result {
             Ok(response) => {
                 let status = response.status().as_u16();
+                if status >= 400 {
+                    log::warn!("[xinghuo] {operation} returned HTTP {status}");
+                }
                 let body = response.text().await.map_err(|e| network_error(&e))?;
                 return Ok(HttpReply { status, body });
             }
             Err(error) => {
+                let kind = if error.is_timeout() {
+                    "timeout"
+                } else {
+                    "connect"
+                };
+                log::warn!(
+                    "[xinghuo] {operation} failed: {kind}, attempt {}",
+                    attempt + 1
+                );
                 let retryable = error.is_connect() || (idempotent && error.is_timeout());
                 if retryable && attempt < RETRY_WAITS_MS.len() {
                     tokio::time::sleep(Duration::from_millis(RETRY_WAITS_MS[attempt])).await;
@@ -99,47 +112,37 @@ pub(crate) struct ActivateReply {
     pub ok: bool,
     #[serde(default)]
     pub token: String,
-    #[serde(default)]
-    pub plan: Option<String>,
-    #[serde(default)]
-    pub expires_at: Option<String>,
-    #[serde(default)]
-    pub quota: Option<Quota>,
-    #[serde(default)]
-    pub balance_scope: Option<String>,
 }
 
-pub(crate) fn parse_activate_reply(reply: &HttpReply) -> Result<ActivateReply, XinghuoError> {
-    if reply.status != 200 {
-        return Err(reply_error(reply));
-    }
-    match serde_json::from_str::<ActivateReply>(&reply.body) {
-        Ok(parsed) if parsed.ok && !parsed.token.trim().is_empty() => Ok(ActivateReply {
-            token: parsed.token.trim().to_string(),
-            ..parsed
-        }),
-        _ => Err(XinghuoError::with_status("BAD_RESPONSE", reply.status, "")),
-    }
-}
-
-/// POST /api/v1/plugin/activate
 pub(crate) async fn activate(
     site: &str,
     cdk: &str,
-    device_id: &str,
-    device_name: &str,
     prior_token: Option<&str>,
 ) -> Result<ActivateReply, XinghuoError> {
     let url = format!("{site}{ACTIVATE_PATH}");
     let body = json!({
         "cdk": cdk,
-        "device_id": device_id,
-        "device_name": device_name,
         "client": CLIENT_ID,
         "token": prior_token.unwrap_or_default(),
     });
-    let reply = send(|client| client.post(&url).json(&body), false).await?;
-    parse_activate_reply(&reply)
+    let reply = send(
+        |client| client.post(&url).json(&body),
+        false,
+        ACTIVATE_PATH,
+    )
+    .await?;
+    if reply.status != 200 {
+        return Err(reply_error(&reply));
+    }
+    let parsed: ActivateReply = serde_json::from_str(&reply.body)
+        .map_err(|_| XinghuoError::with_status("BAD_RESPONSE", reply.status, ""))?;
+    if !parsed.ok || parsed.token.trim().is_empty() {
+        return Err(XinghuoError::with_status("BAD_RESPONSE", reply.status, ""));
+    }
+    Ok(ActivateReply {
+        token: parsed.token.trim().to_string(),
+        ..parsed
+    })
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -180,7 +183,12 @@ pub(crate) fn parse_status_reply(reply: &HttpReply) -> Result<StatusReply, Xingh
 /// GET /api/v1/plugin/status
 pub(crate) async fn status(site: &str, token: &str) -> Result<StatusReply, XinghuoError> {
     let url = format!("{site}{STATUS_PATH}");
-    let reply = send(|client| client.get(&url).bearer_auth(token), true).await?;
+    let reply = send(
+        |client| client.get(&url).bearer_auth(token),
+        true,
+        STATUS_PATH,
+    )
+    .await?;
     parse_status_reply(&reply)
 }
 
@@ -306,7 +314,13 @@ pub(crate) fn parse_client_config(reply: &HttpReply) -> Option<ClientConfig> {
 /// GET /api/v1/plugin/client-config。老后端 404 或请求失败时返回 None，由调用方用默认值。
 pub(crate) async fn client_config(site: &str, token: &str) -> Option<ClientConfig> {
     let url = format!("{site}{CLIENT_CONFIG_PATH}");
-    match send(|client| client.get(&url).bearer_auth(token), true).await {
+    match send(
+        |client| client.get(&url).bearer_auth(token),
+        true,
+        CLIENT_CONFIG_PATH,
+    )
+    .await
+    {
         Ok(reply) => parse_client_config(&reply),
         Err(error) => {
             log::warn!("[xinghuo] 获取客户端配置失败，使用默认值: {error}");
@@ -338,7 +352,12 @@ pub(crate) fn parse_models(reply: &HttpReply) -> Option<Vec<String>> {
 /// GET /v1/models；保留上游错误以区分额度、权限与网络问题。
 pub(crate) async fn checked_models(site: &str, token: &str) -> Result<Vec<String>, XinghuoError> {
     let url = format!("{site}{MODELS_PATH}");
-    let reply = send(|client| client.get(&url).bearer_auth(token), true).await?;
+    let reply = send(
+        |client| client.get(&url).bearer_auth(token),
+        true,
+        MODELS_PATH,
+    )
+    .await?;
     if reply.status != 200 {
         return Err(reply_error(&reply));
     }
@@ -357,46 +376,16 @@ mod tests {
     }
 
     #[test]
-    fn activate_success_returns_trimmed_token_and_quota() {
-        let parsed = parse_activate_reply(&reply(
-            200,
-            r#"{"ok":true,"token":" sk-abc ","base_url":"https://ai.wfpromax.xyz/v1","plan":"pro","expires_at":null,"quota":{"unit":"USD","total":100,"used":0,"remaining":100}}"#,
-        ))
-        .unwrap();
-        assert_eq!(parsed.token, "sk-abc");
-        assert_eq!(parsed.plan.as_deref(), Some("pro"));
-        assert!(parsed.expires_at.is_none());
-        assert_eq!(parsed.quota.unwrap().remaining, 100.0);
-    }
-
-    #[test]
-    fn activate_business_error_passes_code_through() {
-        let error = parse_activate_reply(&reply(
-            404,
-            r#"{"ok":false,"code":"CDK_NOT_FOUND","message":"激活码不存在或已停用"}"#,
-        ))
-        .unwrap_err();
-        assert_eq!(error.code, "CDK_NOT_FOUND");
-        assert_eq!(error.status, Some(404));
-    }
-
-    #[test]
     fn server_errors_and_html_pages_collapse_to_http_error() {
         for (status, body) in [
             (500, r#"{"ok":false,"code":"INTERNAL_ERROR","message":"x"}"#),
             (502, "<html>Bad Gateway</html>"),
             (403, ""),
         ] {
-            let error = parse_activate_reply(&reply(status, body)).unwrap_err();
+            let error = reply_error(&reply(status, body));
             assert_eq!(error.code, "HTTP_ERROR", "status {status}");
             assert_eq!(error.status, Some(status));
         }
-    }
-
-    #[test]
-    fn activate_without_token_is_a_bad_response() {
-        let error = parse_activate_reply(&reply(200, r#"{"ok":true,"token":""}"#)).unwrap_err();
-        assert_eq!(error.code, "BAD_RESPONSE");
     }
 
     #[test]

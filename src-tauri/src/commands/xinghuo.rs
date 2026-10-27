@@ -68,6 +68,16 @@ pub async fn activate_xinghuo(
     .map_err(|e| XinghuoError::new("INTERNAL", e.to_string()))?
 }
 
+/// 打包脱敏调试日志到桌面，不包含完整凭据或用户数据库。
+#[tauri::command]
+pub async fn export_xinghuo_diagnostics() -> Result<String, XinghuoError> {
+    tauri::async_runtime::spawn_blocking(xinghuo::diagnostics::export_diagnostics)
+        .await
+        .map_err(|error| XinghuoError::new("INTERNAL", error.to_string()))?
+        .map(|path| path.to_string_lossy().into_owned())
+        .map_err(|error| XinghuoError::new("DIAGNOSTIC_EXPORT", error))
+}
+
 /// 联网刷新套餐、到期与余额
 #[tauri::command]
 pub async fn refresh_xinghuo_status() -> Result<ActivationView, XinghuoError> {

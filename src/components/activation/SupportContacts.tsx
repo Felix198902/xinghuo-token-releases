@@ -1,6 +1,8 @@
 import { useState } from "react";
-import { ChevronDown, ExternalLink } from "lucide-react";
+import { ChevronDown, ExternalLink, FileArchive, Loader2 } from "lucide-react";
 import { settingsApi } from "@/lib/api";
+import { xinghuoApi } from "@/lib/api/xinghuo";
+import { extractErrorMessage } from "@/utils/errorUtils";
 import { Button } from "@/components/ui/button";
 import qqQr from "@/assets/contact/qq-customer-service.jpg";
 import wechatQr from "@/assets/contact/wechat-customer-service.jpg";
@@ -43,6 +45,24 @@ function ContactIcon({ kind }: { kind: "qq" | "wechat" }) {
 
 export function SupportContacts({ contact }: { contact: string }) {
   const [expanded, setExpanded] = useState({ qq: false, wechat: false });
+  const [packing, setPacking] = useState(false);
+  const [archivePath, setArchivePath] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  const exportDiagnostics = async () => {
+    if (packing) return;
+    setPacking(true);
+    setArchivePath(null);
+    setExportError(null);
+    try {
+      setArchivePath(await xinghuoApi.exportDiagnostics());
+    } catch (error) {
+      setExportError(extractErrorMessage(error) || "日志打包失败，请稍后重试");
+    } finally {
+      setPacking(false);
+    }
+  };
+
   // 品牌客服入口始终保留，服务端只下发 QQ 时也不能隐藏微信。
   const hasKnownContact = contacts.some((item) =>
     contact.includes(item.account),
@@ -130,6 +150,36 @@ export function SupportContacts({ contact }: { contact: string }) {
       {contact.trim() && !hasKnownContact && (
         <p className="mt-3 text-sm text-muted-foreground">{contact}</p>
       )}
+      <div className="mt-4 space-y-2 border-t border-border/60 pt-4">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="w-full gap-2"
+          disabled={packing}
+          onClick={exportDiagnostics}
+        >
+          {packing ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <FileArchive className="h-4 w-4" />
+          )}
+          {packing ? "正在打包调试日志…" : "一键打包调试日志"}
+        </Button>
+        <p className="text-xs text-muted-foreground">
+          日志已脱敏，不会包含完整 CDK、SK 或用户数据库。
+        </p>
+        {archivePath && (
+          <p className="break-all rounded-lg bg-emerald-500/10 p-2 text-xs text-emerald-700 dark:text-emerald-300">
+            已保存到：{archivePath}，请将此 ZIP 发送给客服。
+          </p>
+        )}
+        {exportError && (
+          <p role="alert" className="text-xs text-red-600 dark:text-red-400">
+            {exportError}
+          </p>
+        )}
+      </div>
     </section>
   );
 }

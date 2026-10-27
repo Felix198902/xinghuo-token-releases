@@ -11,17 +11,11 @@ describe("describeActivationError", () => {
   it("maps known server codes to dedicated messages", () => {
     expect(
       describeActivationError(
-        {
-          code: "DEVICE_LIMIT",
-          status: 403,
-          message: "该激活码绑定设备数已达上限",
-        },
+        { code: "CDK_NOT_FOUND", status: 404, message: "x" },
         t,
         CONTACT,
       ),
-    ).toBe(
-      `activation.errors.deviceLimit|${JSON.stringify({ contact: CONTACT })}`,
-    );
+    ).toContain("activation.errors.cdkNotFound");
     expect(
       describeActivationError(
         { code: "CDK_TOKEN_REQUIRED", status: 403, message: "x" },

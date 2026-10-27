@@ -110,6 +110,10 @@ export const xinghuoApi = {
     return invoke("refresh_xinghuo_status");
   },
 
+  exportDiagnostics(): Promise<string> {
+    return invoke("export_xinghuo_diagnostics");
+  },
+
   discoverDesktopModels(input: string): Promise<string[]> {
     return invoke("discover_xinghuo_desktop_models", { input });
   },

@@ -167,7 +167,7 @@ describe("ActivationPanel", () => {
 
   it("激活失败保留输入弹窗，主动接入不允许跳过", async () => {
     getActivation.mockResolvedValue(inactiveView);
-    activate.mockRejectedValue({ code: "DEVICE_LIMIT", status: 403 });
+    activate.mockRejectedValue({ code: "CDK_NOT_FOUND", status: 403 });
     renderPanel();
     fireEvent.click(await screen.findByText("一键接入"));
     fireEvent.change(screen.getByLabelText("activation.inputPlaceholder"), {
@@ -312,9 +312,9 @@ describe("ActivationPanel", () => {
   it("shows the mapped message when activation fails", async () => {
     getActivation.mockResolvedValue(inactiveView);
     activate.mockRejectedValue({
-      code: "DEVICE_LIMIT",
-      status: 403,
-      message: "该激活码绑定设备数已达上限",
+      code: "CDK_NOT_FOUND",
+      status: 404,
+      message: "激活码不存在",
     });
     renderPanel();
     fireEvent.click(await screen.findByText("Codex"));
@@ -327,7 +327,7 @@ describe("ActivationPanel", () => {
     fireEvent.click(screen.getByText("activation.activate"));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "activation.errors.deviceLimit",
+      "activation.errors.cdkNotFound",
     );
   });
 
