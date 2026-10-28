@@ -372,12 +372,12 @@ fn desktop_model_quota_error_is_not_reported_as_empty_catalog() {
 }
 
 #[test]
-fn desktop_native_catalog_routes_exact_models_and_preserves_streaming() {
+fn desktop_native_catalog_routes_all_models_and_preserves_streaming() {
     desktop_catalog_http_test("anthropic");
 }
 
 #[test]
-fn desktop_responses_bridge_keeps_claude_models_and_translates_streaming() {
+fn desktop_responses_bridge_routes_all_models_and_translates_streaming() {
     desktop_catalog_http_test("openai_responses");
 }
 
@@ -435,7 +435,12 @@ fn desktop_catalog_http_test(api_format: &str) {
         state.db.update_global_proxy_config(config).await.unwrap();
         (format!("http://{addr}/v1"), task)
     });
-    let ids = vec!["claude-sonnet-5".to_string(), "claude-opus-4-8".to_string()];
+    let ids = vec![
+        "claude-sonnet-5".to_string(),
+        "claude-opus-4-8".to_string(),
+        "deepseek-v4-pro".to_string(),
+        "hermes-3".to_string(),
+    ];
     let plan = ApplyPlan {
         apps: vec![ManagedApp::ClaudeDesktop],
         claude_desktop_models: ids.clone(),
@@ -479,16 +484,17 @@ fn desktop_catalog_http_test(api_format: &str) {
             .unwrap();
         assert_eq!(models["data"].as_array().unwrap().len(), ids.len());
         for id in &ids {
-            assert!(models["data"]
+            let route = models["data"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|m| m["id"] == *id));
+                .find(|model| model["id"] == *id || model["display_name"] == *id)
+                .unwrap_or_else(|| panic!("missing desktop route for {id}: {models}"));
             let response = client
                 .post(format!("{base}/v1/messages"))
                 .bearer_auth(token)
                 .json(&json!({
-                    "model":id,"max_tokens":16,"stream":true,
+                    "model":route["id"],"max_tokens":16,"stream":true,
                     "system":[{"type":"text","text":"You are a desktop assistant, not Claude Code."}],
                     "tool_choice":{"type":"any"},
                     "tools":[{"name":"lookup","input_schema":{"type":"object"}}],
