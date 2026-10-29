@@ -123,6 +123,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Prepare Tauri signing key
+        if: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
         shell: bash
         run: |
           # 调试：检查 Secret 是否存在
@@ -628,6 +629,7 @@ jobs:
 
   assemble-latest-json:
     name: Assemble latest.json
+    if: false
     runs-on: ubuntu-22.04
     needs: publish-release
     permissions:
