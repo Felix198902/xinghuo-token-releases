@@ -49,7 +49,7 @@ async function findOrCreateRelease() {
       name: `星火无限token ${tag}`,
       body: `星火无限token ${tag}`,
       target_commitish: process.env.GITHUB_SHA || "custom",
-      prerelease: "false",
+      prerelease: "true",
     }),
   });
 }

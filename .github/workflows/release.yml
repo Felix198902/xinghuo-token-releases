@@ -600,14 +600,15 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
-          name: CC Switch ${{ github.ref_name }}
-          prerelease: false
+          name: 星火无限token ${{ github.ref_name }}
+          prerelease: true
           body: |
-            ## CC Switch ${{ github.ref_name }}
+            ## 星火无限token ${{ github.ref_name }}
 
-            🌐 **Only Official Website / 唯一官方网站 / 唯一の公式サイト**: [ccswitch.io](https://ccswitch.io)
-
-            Claude Code 供应商切换工具
+            - 全量接入 API 返回的模型，支持非 Claude 模型路由
+            - 兼容新版 Claude Desktop 的 x-api-key / Bearer 认证
+            - 修复 Windows 代理 socket 生命周期问题
+            - 新增 Claude CLI / VM 工作区预检与官方离线安装入口
 
             ### 下载
 
