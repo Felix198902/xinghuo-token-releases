@@ -123,7 +123,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Prepare Tauri signing key
-        if: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        if: ${{ env.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         shell: bash
         run: |
           # 调试：检查 Secret 是否存在
