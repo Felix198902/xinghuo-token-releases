@@ -44,6 +44,7 @@ import {
 import { describeActivationError } from "./activationErrors";
 import { isKeyQuotaExhausted, renewalReason } from "./RenewalBanner";
 import { DesktopConnectionDialog } from "./DesktopConnectionDialog";
+import { DesktopRuntimeNotice } from "./DesktopRuntimeNotice";
 
 function formatExpiry(
   value: string | null | undefined,
@@ -561,6 +562,11 @@ export function ActivationPanel() {
             <p className="px-4 pb-3 text-center text-xs text-muted-foreground">
               Desktop：{view.desktopModel ?? "Claude"} · {view.desktopMaskedKey}
             </p>
+          )}
+          {view?.desktopConnectionConfigured && (
+            <div className="px-4 pb-4">
+              <DesktopRuntimeNotice status={view.desktopRuntime} />
+            </div>
           )}
         </section>
 

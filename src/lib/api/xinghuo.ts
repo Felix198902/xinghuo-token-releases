@@ -44,6 +44,13 @@ export interface XinghuoActivationView {
   desktopMaskedKey?: string;
   desktopApiFormat?: DesktopApiFormat;
   desktopModel?: string;
+  desktopRuntime?: XinghuoDesktopRuntimeStatus;
+}
+
+export interface XinghuoDesktopRuntimeStatus {
+  helperInstalled: boolean;
+  workspaceInstalled: boolean;
+  offlineInstallerUrl: string;
 }
 
 export type DesktopApiFormat = "anthropic" | "openai_chat" | "openai_responses";

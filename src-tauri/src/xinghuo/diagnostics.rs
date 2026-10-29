@@ -91,6 +91,7 @@ pub(crate) fn export_diagnostics_to(output_dir: &Path, log_dir: &Path) -> Result
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
         "activation": super::current_view(),
+        "desktopRuntime": super::desktop_runtime::current_status(),
         "credentialHandling": "CDK is exchanged for SK without device binding; SK is used as the Bearer credential",
         "privacy": "Credentials, activation records, wallets and databases are not included"
     });

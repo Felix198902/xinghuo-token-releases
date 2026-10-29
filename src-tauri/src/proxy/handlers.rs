@@ -274,25 +274,35 @@ fn validate_claude_desktop_gateway_auth(
 ) -> Result<(), ProxyError> {
     let expected = crate::claude_desktop_config::get_or_create_gateway_token(state.db.as_ref())
         .map_err(|e| ProxyError::AuthError(e.to_string()))?;
-    let Some(value) = headers.get(axum::http::header::AUTHORIZATION) else {
-        return Err(ProxyError::AuthError(
-            "Claude Desktop gateway 缺少 Authorization 头".to_string(),
-        ));
-    };
-    let value = value
-        .to_str()
-        .map_err(|_| ProxyError::AuthError("Authorization 头格式无效".to_string()))?;
-    let token = value
-        .strip_prefix("Bearer ")
-        .or_else(|| value.strip_prefix("bearer "))
-        .unwrap_or("")
-        .trim();
+    let token = extract_gateway_token(headers).ok_or_else(|| {
+        ProxyError::AuthError(
+            "Claude Desktop gateway 缺少 Authorization / x-api-key 头".to_string(),
+        )
+    })?;
     if token != expected {
         return Err(ProxyError::AuthError(
             "Claude Desktop gateway token 无效".to_string(),
         ));
     }
     Ok(())
+}
+
+fn extract_gateway_token(headers: &axum::http::HeaderMap) -> Option<String> {
+    if let Some(value) = headers.get(axum::http::header::AUTHORIZATION) {
+        if let Ok(value) = value.to_str() {
+            let token = value
+                .strip_prefix("Bearer ")
+                .or_else(|| value.strip_prefix("bearer "))
+                .unwrap_or(value)
+                .trim();
+            return Some(token.to_string());
+        }
+    }
+    headers
+        .get("x-api-key")?
+        .to_str()
+        .ok()
+        .map(|value| value.trim().to_string())
 }
 
 /// Claude 格式转换处理（独有逻辑）
@@ -2858,7 +2868,7 @@ async fn log_usage(
 mod tests {
     use super::{
         body_looks_like_sse, chat_sse_to_response_value, classify_body_for_diagnostics,
-        codex_proxy_error_json, responses_sse_stream_to_anthropic_message,
+        codex_proxy_error_json, extract_gateway_token, responses_sse_stream_to_anthropic_message,
         responses_sse_to_response_value, should_use_claude_transform_streaming, transform,
         upstream_body_parse_error,
     };
@@ -2868,6 +2878,25 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
         Arc,
     };
+
+    #[test]
+    fn desktop_gateway_accepts_x_api_key_and_bearer_tokens() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-api-key", " ccs-desktop-token ".parse().unwrap());
+        assert_eq!(
+            extract_gateway_token(&headers).as_deref(),
+            Some("ccs-desktop-token")
+        );
+
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer ccs-bearer-token".parse().unwrap(),
+        );
+        assert_eq!(
+            extract_gateway_token(&headers).as_deref(),
+            Some("ccs-bearer-token")
+        );
+    }
 
     #[test]
     fn body_looks_like_sse_detects_unlabeled_sse_prefixes() {

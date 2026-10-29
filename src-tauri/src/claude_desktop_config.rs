@@ -639,11 +639,11 @@ fn direct_inference_model_specs(provider: &Provider) -> Result<Vec<InferenceMode
         });
     }
 
-    // Sort supports_1m=true first within each name so the subsequent dedup_by
-    // (which keeps the first occurrence) preserves the 1M-capable variant.
+    // Keep the tier order shown in the UI and prefer the 1M variant during dedup.
     result.sort_by(|a, b| {
-        a.name
-            .cmp(&b.name)
+        claude_role_rank(&a.name)
+            .cmp(&claude_role_rank(&b.name))
+            .then_with(|| a.name.cmp(&b.name))
             .then_with(|| b.supports_1m.cmp(&a.supports_1m))
     });
     result.dedup_by(|a, b| a.name == b.name);
@@ -700,7 +700,11 @@ pub fn proxy_model_routes(provider: &Provider) -> Result<Vec<ResolvedModelRoute>
         });
     }
 
-    result.sort_by(|a, b| a.route_id.cmp(&b.route_id));
+    result.sort_by(|a, b| {
+        claude_role_rank(&a.route_id)
+            .cmp(&claude_role_rank(&b.route_id))
+            .then_with(|| a.route_id.cmp(&b.route_id))
+    });
     result.dedup_by(|a, b| a.route_id == b.route_id);
 
     if result.is_empty() {
@@ -920,6 +924,16 @@ fn claude_role_keyword(model: &str) -> Option<&'static str> {
         Some("sonnet")
     } else {
         None
+    }
+}
+
+fn claude_role_rank(model: &str) -> usize {
+    match claude_role_keyword(model) {
+        Some("sonnet") => 0,
+        Some("opus") => 1,
+        Some("fable") => 2,
+        Some("haiku") => 3,
+        _ => 4,
     }
 }
 

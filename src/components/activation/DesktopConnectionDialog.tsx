@@ -16,6 +16,7 @@ import {
   type XinghuoActivationView,
   type XinghuoActivateResult,
 } from "@/lib/api/xinghuo";
+import { DesktopRuntimeNotice } from "./DesktopRuntimeNotice";
 
 interface Props {
   view: XinghuoActivationView;
@@ -44,6 +45,7 @@ export function DesktopConnectionDialog({
   const [input, setInput] = useState("");
   const [models, setModels] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [runtime, setRuntime] = useState(view.desktopRuntime);
   const discover = useMutation({
     mutationFn: () => xinghuoApi.discoverDesktopModels(input.trim()),
     onSuccess: (items) => {
@@ -59,8 +61,13 @@ export function DesktopConnectionDialog({
     mutationFn: () => xinghuoApi.configureDesktop(input.trim(), null),
     onSuccess: async (result) => {
       setInput("");
+      setRuntime(result.view.desktopRuntime);
       await onConfigured(result);
-      onClose();
+      const runtimeReady =
+        !result.view.desktopRuntime ||
+        (result.view.desktopRuntime.helperInstalled &&
+          result.view.desktopRuntime.workspaceInstalled);
+      if (runtimeReady) onClose();
     },
     onError: (e) => setError(errorMessage(e)),
   });
@@ -135,6 +142,13 @@ export function DesktopConnectionDialog({
                 )}
               </div>
             </div>
+            <DesktopRuntimeNotice
+              status={runtime}
+              onRecheck={async () => {
+                const latest = await xinghuoApi.getActivation();
+                setRuntime(latest.desktopRuntime);
+              }}
+            />
             {error && (
               <p
                 role="alert"

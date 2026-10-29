@@ -3,6 +3,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestQueryClient } from "../utils/testQueryClient";
 import { DesktopConnectionDialog } from "@/components/activation/DesktopConnectionDialog";
+import type { XinghuoDesktopRuntimeStatus } from "@/lib/api/xinghuo";
 
 const { discover, configure } = vi.hoisted(() => ({
   discover: vi.fn(),
@@ -15,7 +16,7 @@ vi.mock("@/lib/api/xinghuo", async () => ({
   xinghuoApi: { discoverDesktopModels: discover, configureDesktop: configure },
 }));
 
-function panel() {
+function panel(runtime?: XinghuoDesktopRuntimeStatus) {
   const onConfigured = vi.fn().mockResolvedValue(undefined);
   const onClose = vi.fn();
   render(
@@ -26,6 +27,7 @@ function panel() {
           apps: [],
           hasWallet: true,
           maskedKey: "sk-main…1234",
+          desktopRuntime: runtime,
         }}
         onClose={onClose}
         onConfigured={onConfigured}
@@ -111,5 +113,33 @@ describe("DesktopConnectionDialog", () => {
     fireEvent.click(screen.getByText("读取模型"));
     expect(await screen.findByRole("alert")).toHaveTextContent("额度已用完");
     expect(screen.getByRole("button", { name: "保存并接入" })).toBeDisabled();
+  });
+
+  it("keeps the offline runtime remedy visible when workspace components are missing", async () => {
+    const runtime = {
+      helperInstalled: false,
+      workspaceInstalled: false,
+      offlineInstallerUrl:
+        "https://claude.ai/api/desktop/win32/x64/offline/latest/redirect",
+    };
+    discover.mockResolvedValue(["claude-opus-5-5"]);
+    configure.mockResolvedValue({
+      view: { activated: true, desktopRuntime: runtime },
+      apps: [{ app: "claude-desktop", ok: true }],
+    });
+    const { onConfigured, onClose } = panel(runtime);
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Code/Cowork 可能无法启动",
+    );
+    fireEvent.click(screen.getByText("读取模型"));
+    await screen.findByText("claude-opus-5-5");
+    fireEvent.click(screen.getByText("保存并接入"));
+
+    await waitFor(() => expect(onConfigured).toHaveBeenCalled());
+    expect(onClose).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: "下载官方离线完整版" }),
+    ).toBeInTheDocument();
   });
 });

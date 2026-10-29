@@ -1,6 +1,6 @@
 [package]
 name = "cc-switch"
-version = "3.20.6"
+version = "3.20.7"
 description = "星火无限token 桌面客户端"
 authors = ["Jason Young"]
 license = "MIT"

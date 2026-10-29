@@ -7,6 +7,7 @@
 //! 3. 顾客可见文案只写现象、错误码和联系方式，日志不得记录完整凭据。
 
 mod api;
+pub mod desktop_runtime;
 pub mod diagnostics;
 mod providers;
 pub mod restore;
@@ -215,6 +216,8 @@ pub struct ActivationView {
     pub desktop_api_format: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub desktop_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desktop_runtime: Option<desktop_runtime::DesktopRuntimeStatus>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -264,10 +267,12 @@ pub(crate) fn mask_key(token: &str) -> String {
 
 fn view_of(record: Option<&ActivationRecord>) -> ActivationView {
     let has_wallet = storage::load_wallet().is_some_and(|w| !w.token.is_empty());
+    let desktop_runtime = Some(desktop_runtime::current_status());
     let Some(record) = record.filter(|r| !r.token.is_empty()) else {
         return ActivationView {
             has_wallet,
             restore_available: restore::available(),
+            desktop_runtime,
             ..Default::default()
         };
     };
@@ -300,6 +305,7 @@ fn view_of(record: Option<&ActivationRecord>) -> ActivationView {
             .desktop_connection
             .as_ref()
             .and_then(|c| c.model.clone()),
+        desktop_runtime,
     }
 }
 

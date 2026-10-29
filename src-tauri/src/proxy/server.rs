@@ -454,6 +454,21 @@ mod tests {
         body: Value,
     }
 
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn listener_socket_is_not_inheritable_on_windows() {
+        use std::os::windows::io::AsRawSocket;
+        use windows_sys::Win32::Foundation::{GetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT};
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind listener");
+        let mut flags = 0u32;
+        let ok = unsafe { GetHandleInformation(listener.as_raw_socket() as HANDLE, &mut flags) };
+        assert_ne!(ok, 0, "GetHandleInformation failed");
+        assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
+    }
+
     /// A base URL pasted as a complete endpoint with the full-URL switch left off
     /// must derive the sibling standalone endpoint instead of having the
     /// standalone path appended to it.
