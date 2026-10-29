@@ -475,7 +475,7 @@ fn desktop_catalog_http_test(api_format: &str) {
         let token = profile["inferenceGatewayApiKey"].as_str().unwrap();
         let models: Value = client
             .get(format!("{base}/v1/models"))
-            .bearer_auth(token)
+            .header("x-api-key", token)
             .send()
             .await
             .unwrap()
@@ -483,16 +483,20 @@ fn desktop_catalog_http_test(api_format: &str) {
             .await
             .unwrap();
         assert_eq!(models["data"].as_array().unwrap().len(), ids.len());
-        for id in &ids {
+        for (index, id) in ids.iter().enumerate() {
             let route = models["data"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .find(|model| model["id"] == *id || model["display_name"] == *id)
                 .unwrap_or_else(|| panic!("missing desktop route for {id}: {models}"));
-            let response = client
-                .post(format!("{base}/v1/messages"))
-                .bearer_auth(token)
+            let request = client.post(format!("{base}/v1/messages"));
+            let request = if index % 2 == 0 {
+                request.bearer_auth(token)
+            } else {
+                request.header("x-api-key", token)
+            };
+            let response = request
                 .json(&json!({
                     "model":route["id"],"max_tokens":16,"stream":true,
                     "system":[{"type":"text","text":"You are a desktop assistant, not Claude Code."}],
