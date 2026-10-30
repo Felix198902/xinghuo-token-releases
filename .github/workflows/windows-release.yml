@@ -144,6 +144,12 @@ jobs:
             "https://gitee.com/jerrylinap/xinghuo-token-releases/releases/download/$TAG/$name" \
             --output "release-assets/$name"
           printf '%s  %s\n' "$SHA256" "release-assets/$name" | sha256sum --check --strict
+          for metadata in SHA256SUMS.txt LICENSE-CC-Switch.txt; do
+            curl --fail --location --retry 3 --connect-timeout 30 --max-time 120 \
+              "https://gitee.com/jerrylinap/xinghuo-token-releases/releases/download/$TAG/$metadata" \
+              --output "release-assets/$metadata"
+          done
+          grep --fixed-strings --line-regexp "${SHA256,,}  $name" release-assets/SHA256SUMS.txt
 
       - name: 上传到已有 GitHub 发行版
         shell: bash
@@ -153,5 +159,14 @@ jobs:
           set -euo pipefail
           name="xinghuo-token_${TAG#v}_universal.dmg"
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY"
-          # 同名附件已存在时停止，避免覆盖已发布的安装包。
-          gh release upload "$TAG" "release-assets/$name" --repo "$GITHUB_REPOSITORY"
+          for asset in "$name" SHA256SUMS.txt LICENSE-CC-Switch.txt; do
+            expected="sha256:$(sha256sum "release-assets/$asset" | cut -d ' ' -f 1)"
+            existing=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
+              --jq ".assets[] | select(.name == \"$asset\") | .digest")
+            if [ -n "$existing" ]; then
+              # 重试时只跳过内容一致的附件，避免覆盖已有安装包。
+              [ "$existing" = "$expected" ]
+            else
+              gh release upload "$TAG" "release-assets/$asset" --repo "$GITHUB_REPOSITORY"
+            fi
+          done
