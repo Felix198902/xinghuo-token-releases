@@ -7,6 +7,11 @@ on:
         description: Existing release tag (for example v3.20.5)
         required: true
         type: string
+      macos_sha256:
+        description: 填写时仅从 Gitee 镜像已签名公证的 Mac 通用 DMG
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: write
@@ -17,6 +22,7 @@ concurrency:
 
 jobs:
   build:
+    if: inputs.macos_sha256 == ''
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -116,3 +122,36 @@ jobs:
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  mirror-macos:
+    name: Mirror notarized macOS Release
+    if: inputs.macos_sha256 != ''
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      TAG: ${{ inputs.tag }}
+      SHA256: ${{ inputs.macos_sha256 }}
+    steps:
+      - name: 校验输入并下载 Gitee 安装包
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$SHA256" =~ ^[0-9a-fA-F]{64}$ ]]
+          name="xinghuo-token_${TAG#v}_universal.dmg"
+          mkdir -p release-assets
+          curl --fail --location --retry 3 --connect-timeout 30 --max-time 600 \
+            "https://gitee.com/jerrylinap/xinghuo-token-releases/releases/download/$TAG/$name" \
+            --output "release-assets/$name"
+          printf '%s  %s\n' "$SHA256" "release-assets/$name" | sha256sum --check --strict
+
+      - name: 上传到已有 GitHub 发行版
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          name="xinghuo-token_${TAG#v}_universal.dmg"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY"
+          # 同名附件已存在时停止，避免覆盖已发布的安装包。
+          gh release upload "$TAG" "release-assets/$name" --repo "$GITHUB_REPOSITORY"
